@@ -17,16 +17,16 @@
 
 #include <drake/manipulation/kuka_iiwa/iiwa_constants.h>
 
+
 #define KUKA_DT 0.002
 #define KUKA_MODEL_PATH "drake/manipulation/models/iiwa_description/urdf/iiwa14_polytope_collision.urdf"
-#define ALLEGRO_PATH "drake/manipulation/models/allegro_hand_description/sdf/allegro_hand_description_right.sdf"
 
 
-#include <iostream>
 /**
- * Run Kuka Sim + Hand
+ * Run Kuka Sim
  * ================
- * Now we create robot arm with the hand
+ * Goal is to create simulation with loaded kuka with added position controller.
+ * Should serve as a quick example on Drake of how to use this code.
 */
 
 namespace drake {
@@ -42,21 +42,16 @@ namespace kuka_iiwa {
         //args (systems::DiagramBuilder<double>*, double timestep)
         auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(&builder, KUKA_DT);
         const std::string urdf = FindResourceOrThrow(KUKA_MODEL_PATH);
-        const std::string sdf = FindResourceOrThrow(ALLEGRO_PATH);
 
+        //create iiwa
         auto iiwa_instance = multibody::Parser(&plant, &scene_graph).AddModels(urdf).at(0);
-        auto allegro_instance = multibody::Parser(&plant, &scene_graph).AddModels(sdf).at(0);
         
         //base is from urdf file, u would have to read it. just weld base to the ground
         plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
-        plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee"), plant.GetFrameByName("hand_root"));
         plant.Finalize();
 
 
         //define constants
-
-        //iiwa is 7 joints, hand is 16
-        //total 23
         const int num_joints = plant.num_positions();
 
         //shitty pid gains
@@ -66,11 +61,11 @@ namespace kuka_iiwa {
         kp.fill(0.3); //PD controller
         auto controller = builder.AddSystem<systems::controllers::InverseDynamicsController<double>>(plant,kp,ki,kd,false);
 
-        drake::VectorX<double> q_des(23);
-        q_des.fill(1);
-        drake::VectorX<double> v_des(23);
-        v_des.fill(0.0);
-        drake::VectorX<double> desired_state_input(2 * num_joints);
+        drake::VectorX<double> q_des(7);
+        q_des << -0.1, -0.2, -0.3, -0.4, -0.5, -0.6, -0.7;
+        drake::VectorX<double> v_des(7);
+        v_des << -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1;
+        drake::VectorX<double> desired_state_input(2 * kIiwaArmNumJoints);
         desired_state_input << q_des, v_des;
 
         auto desired_state_source = builder.AddSystem<systems::ConstantVectorSource<double>>(desired_state_input);
@@ -81,7 +76,7 @@ namespace kuka_iiwa {
 
         // create diagram
         builder.Connect(plant.get_state_output_port(),controller->get_input_port_estimated_state());
-        builder.Connect(controller->get_output_port_control(),plant.get_actuation_input_port());
+        builder.Connect(controller->get_output_port_control(),plant.get_actuation_input_port(iiwa_instance));
         builder.Connect(desired_state_source->get_output_port(), controller->get_input_port_desired_state());
         
         auto sys = builder.Build();
