@@ -20,5 +20,5 @@ target_link_libraries(main drake::drake Eigen3::Eigen)
 add_executable(kuka_sim_test test/tests/run_kuka_sim.cpp)
 target_link_libraries(kuka_sim_test drake::drake Eigen3::Eigen)
 
-add_executable(kuka_allegro_test test/tests/run_kuka_sim.cpp)
+add_executable(kuka_allegro_test test/tests/run_kuka_allegro_sim.cpp)
 target_link_libraries(kuka_allegro_test drake::drake Eigen3::Eigen)
