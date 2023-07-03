@@ -24,6 +24,7 @@
 #include <drake/systems/framework/diagram.h>
 #include <drake/systems/framework/diagram_builder.h>
 #include <drake/systems/primitives/constant_vector_source.h>
+#include <drake/systems/framework/leaf_system.h>
 
 #include <drake/geometry/drake_visualizer.h>
 
@@ -37,13 +38,22 @@
 #define GRIPPER_PATH "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50_no_tip.sdf"
 #define BRICK_PATH "drake/examples/manipulation_station/models/061_foam_brick.sdf"
 
+
+
 namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
 
 //NOTE: UNUSABLE
-//TODO: integrate software with manipulation station or use inspired software from manipulation station.
-//      -> we are interested in separating the state ports of the MultibodyPlant to not use the foam brick.
+//TODO: Got a better idea of how manipulation station works... proposed changes
+//      -> create three multibody plants
+//          -> plant for everything
+//          -> plant for just robot arm
+//          -> plant for just gripper
+//      -> run inversedynamicscontroller, each for robot arm plant and gripper plant
+//      -> connect "plant for everything" outputs into the controllers.... 
+//              don't actually use the other multibody plants 
+
 int runMain()
 {
     systems::DiagramBuilder<double> builder;
@@ -52,9 +62,12 @@ int runMain()
     const std::string gripper_sdf = FindResourceOrThrow(GRIPPER_PATH);
     const std::string brick_sdf = FindResourceOrThrow(BRICK_PATH);
 
-    auto arm_instance = multibody::Parser(&plant, &scene_graph).AddModels(urdf).at(0);
-    auto gripper_instance = multibody::Parser(&plant, &scene_graph).AddModels(gripper_sdf).at(0);
-    auto brick_instance = multibody::Parser(&plant, &scene_graph).AddModels(brick_sdf).at(0);
+    auto parser = multibody::Parser(&plant, &scene_graph);
+
+
+    auto arm_instance =     parser.AddModels(urdf).at(0);
+    auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
+    auto brick_instance =   parser.AddModels(brick_sdf).at(0);
     
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
     plant.WeldFrames(plant.GetFrameByName("iiwa_link_7"), plant.GetFrameByName("body"));
