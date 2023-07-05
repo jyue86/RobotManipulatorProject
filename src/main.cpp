@@ -31,6 +31,10 @@
 #include <drake/manipulation/kuka_iiwa/iiwa_constants.h>
 #include <drake/manipulation/schunk_wsg/schunk_wsg_position_controller.h>
 
+#include <drake/math/rigid_transform.h>
+#include <drake/math/roll_pitch_yaw.h>
+#include <math.h>
+
 #include <iostream>
 
 //define constants needed here
@@ -39,6 +43,7 @@
 #define GRIPPER_PATH "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50_no_tip.sdf"
 #define BRICK_PATH "drake/examples/manipulation_station/models/061_foam_brick.sdf"
 
+# define M_PI 3.14159265358979323846
 
 
 namespace drake {
@@ -66,14 +71,26 @@ int runMain()
     const std::string brick_sdf = FindResourceOrThrow(BRICK_PATH);
 
     auto parser = multibody::Parser(&plant, &scene_graph);
-
-
     auto arm_instance =     parser.AddModels(urdf).at(0);
     auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
     auto brick_instance =   parser.AddModels(brick_sdf).at(0);
     
+    math::RigidTransform<double> schunk_pose = math::RigidTransform<double>::Identity();
+    drake::Vector3<double> schunk_t;
+    schunk_t << 0,0,0;
+    schunk_pose.set_rotation(math::RollPitchYaw<double>(M_PI/2,0,0));
+    schunk_pose.set_translation(schunk_t);
+
+    drake::Vector3<double> brick_t;
+    brick_t << 1,0,0;
+    math::RigidTransform<double> brick_pose0 = math::RigidTransform<double>::Identity();
+    brick_pose0.set_translation(brick_t);
+
+    //WeldFrames has a 3rd argument representing the pose of the object to be welded
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
-    plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee"), plant.GetFrameByName("body") );
+    plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee_kuka"), plant.GetFrameByName("body",gripper_instance), schunk_pose);
+
+    plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base_link", brick_instance), brick_pose0);
     plant.Finalize();
 
 
