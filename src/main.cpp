@@ -160,9 +160,9 @@ int runMain() {
                   plant.get_actuation_input_port(gripper_instance));
   builder.Connect(plant.get_state_output_port(gripper_instance),
                   wsgController->get_state_input_port());
-  // builder.Connect(wsgController->get_grip_force_output_port(), // optional
-  // grip force
-  //                 plant.get_applied_generalized_force_input_port());
+
+  // start visual + simulation
+  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
 
   auto sys = builder.Build();
   systems::Simulator<double> simulator(*sys);
