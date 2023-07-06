@@ -12,6 +12,7 @@
  *
  */
 
+
 #include <drake/common/eigen_types.h>
 #include <drake/common/find_resource.h>
 
