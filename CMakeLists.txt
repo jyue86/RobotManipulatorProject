@@ -27,4 +27,4 @@ add_executable(kuka_brick test/tests/run_kuka_manip_brick.cpp)
 target_link_libraries(kuka_brick drake::drake Eigen3::Eigen)
 
 add_executable(gripper_vis test/tests/visualize_gripper_pose.cpp)
-target_link_libraries(kuka_brick drake::drake Eigen3::Eigen)
+target_link_libraries(gripper_vis drake::drake Eigen3::Eigen)
