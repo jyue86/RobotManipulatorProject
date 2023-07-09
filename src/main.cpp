@@ -58,17 +58,6 @@ namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
 
-// NOTE: UNUSABLE
-// TODO: Got a better idea of how manipulation station works... proposed changes
-//       -> create three multibody plants
-//           -> plant for everything
-//           -> plant for just robot arm
-//           -> plant for just gripper
-//       -> run inversedynamicscontroller, each for robot arm plant and gripper
-//       plant
-//       -> connect "plant for everything" outputs into the controllers....
-//               don't actually use the other multibody plants
-
 int runMain() {
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
@@ -80,30 +69,22 @@ int runMain() {
   const std::string brick_sdf = FindResourceOrThrow(BRICK_PATH);
 
   auto parser = multibody::Parser(&plant, &scene_graph);
-  parser.SetAutoRenaming(
-      true); // needed to differentiate multiple objects of same type
-  auto arm_instance = parser.AddModels(urdf).at(0);
-  auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
-  auto brick_instance = parser.AddModels(brick_sdf).at(0);
+  parser.SetAutoRenaming(true); // needed to differentiate multiple objects of same type
+  
 
-  math::RigidTransform<double> schunk_pose =
-      math::RigidTransform<double>::Identity();
+  math::RigidTransform<double> schunk_pose = math::RigidTransform<double>::Identity();
   drake::Vector3<double> schunk_t(0, 0, 0);
   schunk_pose.set_rotation(math::RollPitchYaw<double>(M_PI / 2, 0, 0));
   schunk_pose.set_translation(schunk_t);
 
   drake::Vector3<double> brick_t(0.65, 0.65, 0);
-  math::RigidTransform<double> brick_pose0 =
-      math::RigidTransform<double>::Identity();
+  math::RigidTransform<double> brick_pose0 = math::RigidTransform<double>::Identity();
   brick_pose0.set_translation(brick_t);
 
   // Gripper to brick
   Vector3<double> p_GgraspO(0, 0.11, 0);
-  math::RotationMatrixd r_Ggrasp0 =
-      math::RotationMatrixd(math::RotationMatrixd::MakeXRotation(M_PI / 2) *
-                            math::RotationMatrixd::MakeZRotation(M_PI / 2));
-  math::RigidTransform<double> X_OGgrasp =
-      math::RigidTransform(r_Ggrasp0, p_GgraspO).inverse();
+  math::RotationMatrixd r_Ggrasp0 = math::RotationMatrixd(math::RotationMatrixd::MakeXRotation(M_PI / 2) * math::RotationMatrixd::MakeZRotation(M_PI / 2));
+  math::RigidTransform<double> X_OGgrasp = math::RigidTransform(r_Ggrasp0, p_GgraspO).inverse();
   math::RigidTransform<double> X_GgraspGpregrasp(Vector3<double>(0, -0.08, 0));
 
   std::map<std::string, math::RigidTransform<double>> X_O{
@@ -174,73 +155,15 @@ int runMain() {
     plant.WeldFrames(plant.world_frame(),
                      plant.GetFrameByName("body", gripper_instance), X);
   }
-
-  // WeldFrames has a 3rd argument representing the pose of the object to be
-  // welded
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
-  plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee_kuka"),
-                   plant.GetFrameByName("body", gripper_instance), schunk_pose);
-
-  plant.WeldFrames(plant.world_frame(),
-                   plant.GetFrameByName("base_link", brick_instance),
-                   brick_pose0);
+  
   plant.Finalize();
-
   multibody::Parser parser_arm(&plant_arm);
   parser_arm.AddModels(urdf);
   plant_arm.WeldFrames(plant_arm.world_frame(),
                        plant_arm.GetFrameByName("base"));
   plant_arm.Finalize();
 
-  const int num_joints =
-      plant.num_positions(); // 9 actuators total (7 iiwa, 2 gripper) .... (this
-                             // returns 16 positions for brick)
 
-  const int num_joints_iiwa = 7;
-  // shitty pid gains
-  Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  kp.fill(0.3); // PD controller
-  auto controller =
-      builder
-          .AddSystem<systems::controllers::InverseDynamicsController<double>>(
-              plant_arm, kp, ki, kd, false);
-  auto wsgController =
-      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>();
-
-  drake::VectorX<double> q_des(kIiwaArmNumJoints);
-  q_des.fill(1);
-  drake::VectorX<double> v_des(kIiwaArmNumJoints);
-  v_des.fill(0.0);
-  drake::VectorX<double> desired_state_input(2 * kIiwaArmNumJoints);
-  desired_state_input << q_des, v_des;
-
-  auto desired_state_source =
-      builder.AddSystem<systems::ConstantVectorSource<double>>(
-          desired_state_input);
-  desired_state_source->set_name("desired_state_constant");
-  auto gripperDesiredStateSource =
-      builder.AddSystem<systems::ConstantVectorSource<double>>(
-          systems::BasicVector<double>{0, 0});
-  gripperDesiredStateSource->set_name("gripper_desired_state_constant");
-
-  // connect only arm/iiwa
-  builder.Connect(plant.get_state_output_port(arm_instance),
-                  controller->get_input_port_estimated_state());
-  builder.Connect(controller->get_output_port_control(),
-                  plant.get_actuation_input_port(arm_instance));
-
-  builder.Connect(desired_state_source->get_output_port(),
-                  controller->get_input_port_desired_state());
-
-  manipulation::schunk_wsg::SchunkWsgPdController gripperController;
-  builder.Connect(gripperDesiredStateSource->get_output_port(),
-                  wsgController->get_desired_state_input_port());
-  builder.Connect(wsgController->get_generalized_force_output_port(),
-                  plant.get_actuation_input_port(gripper_instance));
-  builder.Connect(plant.get_state_output_port(gripper_instance),
-                  wsgController->get_state_input_port());
 
   // start visual + simulation
   geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
