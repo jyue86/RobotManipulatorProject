@@ -163,7 +163,7 @@ class PseudoInverseController : public systems::LeafSystem<double>
     {
         auto V_G = V_G_port->Eval(context);
         auto q = q_port->Eval(context);
-        plant_->SetPositions(&context_, iiwa_, q);
+        plant_->SetPositions(context_.get(), iiwa_, q);
         drake::EigenPtr<MatrixX<double>> J_G;
 
         drake::Vector3<double> zeros;
@@ -177,7 +177,7 @@ class PseudoInverseController : public systems::LeafSystem<double>
             J_G);
 
         auto J_G_val = *J_G;
-        auto realJ_G = J_G_val( Eigen::indexing::all, Eigen::seq(iiwa_start, iiwa_end+1) );
+        auto realJ_G = J_G_val( Eigen::all, Eigen::seq(iiwa_start, iiwa_end+1) );
 
         auto v = (realJ_G.transpose() * realJ_G).inverse()*realJ_G.transpose() * V_G;
         output->SetFromVector(v);
@@ -234,8 +234,8 @@ int runMain() {
   trajectories::PiecewisePose<double> traj = MakeGripperPoseTrajectory(X_G,times);
   std::unique_ptr<trajectories::Trajectory<double>> traj_V_G = traj.MakeDerivative(); //might need std::move()
 
-  auto V_G_source = builder.AddSystem(systems::TrajectorySource(traj_V_G));
-  V_G_source.set_name("v_WG");
+  auto V_G_source = builder.AddSystem<systems::TrajectorySource<double>>(*traj_V_G.get());
+  V_G_source->set_name("v_WG");
 
   //pseudoinversecontroller IMPLEMENT
 //   auto controller = builder.AddSystem()
