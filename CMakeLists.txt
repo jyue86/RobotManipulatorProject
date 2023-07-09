@@ -22,3 +22,9 @@ target_link_libraries(kuka_sim_test drake::drake Eigen3::Eigen)
 
 add_executable(kuka_allegro_test test/tests/run_kuka_allegro_sim.cpp)
 target_link_libraries(kuka_allegro_test drake::drake Eigen3::Eigen)
+
+add_executable(kuka_brick test/tests/run_kuka_manip_brick.cpp)
+target_link_libraries(kuka_brick drake::drake Eigen3::Eigen)
+
+add_executable(gripper_vis test/tests/visualize_gripper_pose.cpp)
+target_link_libraries(kuka_brick drake::drake Eigen3::Eigen)
