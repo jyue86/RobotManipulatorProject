@@ -18,7 +18,7 @@
 #include <drake/geometry/drake_visualizer.h>
 #include <drake/geometry/scene_graph.h>
 
-#include <drake/math/rotation_matrix.h>
+
 #include <drake/multibody/parsing/parser.h>
 
 #include <drake/systems/analysis/simulator.h>
@@ -27,20 +27,28 @@
 #include <drake/systems/framework/diagram.h>
 #include <drake/systems/framework/diagram_builder.h>
 #include <drake/systems/framework/leaf_system.h>
+#include <drake/systems/framework/basic_vector.h>
 #include <drake/systems/primitives/constant_vector_source.h>
+#include <drake/systems/primitives/trajectory_source.h>
 
 #include <drake/geometry/drake_visualizer.h>
 
 #include <drake/manipulation/kuka_iiwa/iiwa_constants.h>
 #include <drake/manipulation/schunk_wsg/schunk_wsg_position_controller.h>
 
+#include <drake/math/rotation_matrix.h>
 #include <drake/math/rigid_transform.h>
 #include <drake/math/roll_pitch_yaw.h>
 #include <math.h>
 
+
+
+#include <drake/common/trajectories/piecewise_pose.h>
 #include <iostream>
 #include <map>
-#include <set>
+#include <vector>
+#include <Eigen/Dense>
+#include <Eigen/Core>
 
 // define constants needed here
 #define MULTIBODY_DT 0.002
@@ -58,6 +66,137 @@ namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
 
+using TrajHashBrown = std::map<std::string, math::RigidTransform<double>>;
+using TimeHashBrown = std::map<std::string, double>;
+
+TimeHashBrown makeGripperFrames(TrajHashBrown& X_G, TrajHashBrown X_O)
+{
+    Vector3<double> p_GgraspO(0, 0.11, 0);
+    math::RotationMatrixd r_Ggrasp0 = math::RotationMatrixd(math::RotationMatrixd::MakeXRotation(M_PI / 2) * math::RotationMatrixd::MakeZRotation(M_PI / 2));
+    math::RigidTransform<double> X_OGgrasp = math::RigidTransform(r_Ggrasp0, p_GgraspO).inverse();
+    math::RigidTransform<double> X_GgraspGpregrasp(Vector3<double>(0, -0.08, 0));
+
+    X_G["pick"] = X_O["initial"] * X_OGgrasp;
+    X_G["prepick"] = X_G["pick"] * X_GgraspGpregrasp;
+    X_G["place"] = X_O["goal"] * X_OGgrasp;
+    X_G["preplace"] = X_G["place"] * X_GgraspGpregrasp;
+
+    // interpolating halfway pose
+    math::RigidTransform<double> X_GprepickGpreplace = X_G["prepick"].inverse() * X_G["preplace"];
+    Eigen::AngleAxis<double> angleAxis = X_GprepickGpreplace.rotation().ToAngleAxis();
+    math::RigidTransform<double> X_GprepickGclearance = math::RigidTransform<double>(
+        Eigen::AngleAxis<double>(angleAxis.angle() / 2, angleAxis.axis()),
+        X_GprepickGpreplace.translation() / 2 + Vector3<double>(0, -0.3, 0));
+    X_G["clearance"] = X_G["prepick"] * X_GprepickGclearance;
+
+    // timing
+    TimeHashBrown times{{"initial", 0}};
+    math::RigidTransform<double> X_GinitialGprepick =
+        X_G["initial"].inverse() * X_G["prepick"];
+    times["prepick"] =
+        times["initial"] + 10 + X_GinitialGprepick.translation().norm();
+
+    times["pick_start"] = times["prepick"] + 2;
+    times["pick_end"] = times["pick_start"] + 2;
+    X_G["pick_start"] = X_G["pick"];
+    X_G["pick_end"] = X_G["pick"];
+    times["postpick"] = times["pick_end"] + 2;
+    X_G["postpick"] = X_G["prepick"];
+
+    double timeToFromClearance = 10 + X_GprepickGclearance.translation().norm();
+    times["clearance"] = times["postpick"] + timeToFromClearance;
+    times["preplace"] = times["clearance"] + timeToFromClearance;
+    times["place_start"] = times["preplace"] + 2;
+    times["place_end"] = times["place_start"] + 2;
+    X_G["place_start"] = X_G["place"];
+    X_G["place_end"] = X_G["place"];
+    times["postplace"] = times["place_end"] + 2.0;
+    X_G["postplace"] = X_G["preplace"];
+    // std::cout << times["postplace"] << std::endl;    
+
+    return times;
+}
+
+/**
+ * UNTESTED: test at your own risk
+*/
+trajectories::PiecewisePose<double> MakeGripperPoseTrajectory(const TrajHashBrown& X_G, TimeHashBrown& times)
+{
+    std::vector<double> times_vec;
+    std::vector<math::RigidTransform<double>> pose_vec;
+
+    for (const auto& keyval : X_G)
+    {
+        pose_vec.push_back(keyval.second);
+        times_vec.push_back(times[keyval.first]); //hope to god it doesn't crash
+    }
+
+    return trajectories::PiecewisePose<double>::MakeLinear(times_vec, pose_vec);
+}
+
+class PseudoInverseController : public systems::LeafSystem<double>
+{
+    public:
+    PseudoInverseController(multibody::MultibodyPlant<double>& plant)
+    {
+        plant_ = &plant;
+        context_ = plant.CreateDefaultContext();
+        iiwa_ = plant.GetModelInstanceByName("iiwa");
+        G_ = &(plant.GetBodyByName("body").body_frame());
+        W_ = &(plant.world_frame());
+
+        //input port 0 have size 6
+        V_G_port = &(DeclareVectorInputPort("V_WG", 6));
+
+        //input port 1 have size 7
+        q_port = &(DeclareVectorInputPort("iiwa_position", 7));
+
+        DeclareVectorOutputPort("iiwa_velocity", 7, &PseudoInverseController::CalcOutput);
+
+        iiwa_start = plant.GetJointByName("iiwa_joint_1").velocity_start();
+        iiwa_end = plant.GetJointByName("iiwa_joint_7").velocity_start();
+    }
+
+    
+    private:
+    void CalcOutput(const systems::Context<double>& context, systems::BasicVector<double>* output) const
+    {
+        auto V_G = V_G_port->Eval(context);
+        auto q = q_port->Eval(context);
+        plant_->SetPositions(&context_, iiwa_, q);
+        drake::EigenPtr<MatrixX<double>> J_G;
+
+        drake::Vector3<double> zeros;
+        zeros << 0,0,0;
+         plant_->CalcJacobianSpatialVelocity(*(context_.get()), 
+            multibody::JacobianWrtVariable::kV,
+            *G_,
+            zeros,
+            *W_,
+            *W_,
+            J_G);
+
+        auto J_G_val = *J_G;
+        auto realJ_G = J_G_val( Eigen::indexing::all, Eigen::seq(iiwa_start, iiwa_end+1) );
+
+        auto v = (realJ_G.transpose() * realJ_G).inverse()*realJ_G.transpose() * V_G;
+        output->SetFromVector(v);
+    }
+
+    multibody::MultibodyPlant<double>* plant_;
+    std::unique_ptr<systems::Context<double>> context_;
+    multibody::ModelInstanceIndex iiwa_;
+    const multibody::BodyFrame<double>* G_;
+    const multibody::BodyFrame<double>* W_;
+
+    systems::InputPort<double>* V_G_port;
+    systems::InputPort<double>* q_port;
+
+    int iiwa_start, iiwa_end;
+
+}; 
+
+
 int runMain() {
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
@@ -70,7 +209,7 @@ int runMain() {
 
   auto parser = multibody::Parser(&plant, &scene_graph);
   parser.SetAutoRenaming(true); // needed to differentiate multiple objects of same type
-  
+
 
   math::RigidTransform<double> schunk_pose = math::RigidTransform<double>::Identity();
   drake::Vector3<double> schunk_t(0, 0, 0);
@@ -81,88 +220,27 @@ int runMain() {
   math::RigidTransform<double> brick_pose0 = math::RigidTransform<double>::Identity();
   brick_pose0.set_translation(brick_t);
 
-  // Gripper to brick
-  Vector3<double> p_GgraspO(0, 0.11, 0);
-  math::RotationMatrixd r_Ggrasp0 = math::RotationMatrixd(math::RotationMatrixd::MakeXRotation(M_PI / 2) * math::RotationMatrixd::MakeZRotation(M_PI / 2));
-  math::RigidTransform<double> X_OGgrasp = math::RigidTransform(r_Ggrasp0, p_GgraspO).inverse();
-  math::RigidTransform<double> X_GgraspGpregrasp(Vector3<double>(0, -0.08, 0));
-
-  std::map<std::string, math::RigidTransform<double>> X_O{
+  TrajHashBrown X_O{
       {"initial", brick_pose0},
       {"goal", math::RigidTransform<double>(Vector3<double>(0, -0.5, 0))}};
-  std::map<std::string, math::RigidTransform<double>> X_G{
+  TrajHashBrown X_G{
       {"initial", math::RigidTransform<double>(
                       math::RotationMatrixd::MakeXRotation(-M_PI / 2),
                       Vector3<double>(0, -0.25, 0.25))}};
-  X_G["pick"] = X_O["initial"] * X_OGgrasp;
-  X_G["prepick"] = X_G["pick"] * X_GgraspGpregrasp;
-  X_G["place"] = X_O["goal"] * X_OGgrasp;
-  X_G["preplace"] = X_G["place"] * X_GgraspGpregrasp;
 
-  // interpolating halfway pose
-  math::RigidTransform<double> X_GprepickGpreplace =
-      X_G["prepick"].inverse() * X_G["preplace"];
-  Eigen::AngleAxis<double> angleAxis =
-      X_GprepickGpreplace.rotation().ToAngleAxis();
-  math::RigidTransform<double> X_GprepickGclearance =
-      math::RigidTransform<double>(
-          Eigen::AngleAxis<double>(angleAxis.angle() / 2, angleAxis.axis()),
-          X_GprepickGpreplace.translation() / 2 + Vector3<double>(0, -0.3, 0));
-  X_G["clearance"] = X_G["prepick"] * X_GprepickGclearance;
 
-  // timing
-  std::map<std::string, double> times{{"initial", 0}};
-  math::RigidTransform<double> X_GinitialGprepick =
-      X_G["initial"].inverse() * X_G["prepick"];
-  times["prepick"] =
-      times["initial"] + 10 + X_GinitialGprepick.translation().norm();
+  TimeHashBrown times = makeGripperFrames(X_G,X_O);
 
-  times["pick_start"] = times["prepick"] + 2;
-  times["pick_end"] = times["pick_start"] + 2;
-  X_G["pick_start"] = X_G["pick"];
-  X_G["pick_end"] = X_G["pick"];
-  times["postpick"] = times["pick_end"] + 2;
-  X_G["postpick"] = X_G["prepick"];
+  trajectories::PiecewisePose<double> traj = MakeGripperPoseTrajectory(X_G,times);
+  std::unique_ptr<trajectories::Trajectory<double>> traj_V_G = traj.MakeDerivative(); //might need std::move()
 
-  double timeToFromClearance = 10 + X_GprepickGclearance.translation().norm();
-  times["clearance"] = times["postpick"] + timeToFromClearance;
-  times["preplace"] = times["clearance"] + timeToFromClearance;
-  times["place_start"] = times["preplace"] + 2;
-  times["place_end"] = times["place_start"] + 2;
-  X_G["place_start"] = X_G["place"];
-  X_G["place_end"] = X_G["place"];
-  times["postplace"] = times["place_end"] + 2.0;
-  X_G["postplace"] = X_G["preplace"];
-  std::cout << times["postplace"] << std::endl;
+  auto V_G_source = builder.AddSystem(systems::TrajectorySource(traj_V_G));
+  V_G_source.set_name("v_WG");
 
-  // Weld bricks down for trajectory visualization
-  for (auto item : X_O) {
-    math::RigidTransform<double> X = item.second;
+  //pseudoinversecontroller IMPLEMENT
+//   auto controller = builder.AddSystem()
 
-    auto brick_instance = parser.AddModels(brick_sdf).at(0);
-    plant.WeldFrames(plant.world_frame(),
-                     plant.GetFrameByName("base_link", brick_instance), X);
-  }
-
-  // Weld grippers down for trajectory visualization
-  std::set<std::string> allowedGripperPoses{
-      "initial", "prepick", "pick", "place", "preplace", "clearance", "goal"};
-  for (auto item : X_G) {
-    if (allowedGripperPoses.count(item.first) == 0)
-      continue;
-    math::RigidTransform<double> X = item.second;
-    auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
-    plant.WeldFrames(plant.world_frame(),
-                     plant.GetFrameByName("body", gripper_instance), X);
-  }
-  
   plant.Finalize();
-  multibody::Parser parser_arm(&plant_arm);
-  parser_arm.AddModels(urdf);
-  plant_arm.WeldFrames(plant_arm.world_frame(),
-                       plant_arm.GetFrameByName("base"));
-  plant_arm.Finalize();
-
 
 
   // start visual + simulation
@@ -176,8 +254,6 @@ int runMain() {
   simulator.set_target_realtime_rate(1);
   simulator.Initialize();
 
-  // Commented out so no Logic error complaining about actuation input error not
-  // connected
   // simulator.AdvanceTo(300);
   return 0;
 }
