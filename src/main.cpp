@@ -186,7 +186,7 @@ private:
     auto J_G_val = J_G;
     // std::cout << "J_G val:" << J_G_val << std::endl;
     auto realJ_G = J_G_val(Eigen::all, Eigen::seq(iiwa_start, iiwa_end));
-    // std::cout << "Real J_G:" << realJ_G << std::endl;
+    std::cout << "Real J_G:" << realJ_G << std::endl;
 
     auto v = realJ_G.completeOrthogonalDecomposition().pseudoInverse() * V_G;
     // std::cout << "Basic Vector shape: " << v.size() << std::endl;
@@ -365,7 +365,7 @@ int runMain() {
   simulator.set_target_realtime_rate(1);
   simulator.Initialize();
 
-  simulator.AdvanceTo(300);
+  simulator.AdvanceTo(traj.get_position_trajectory().end_time());
   return 0;
 }
 
