@@ -49,6 +49,7 @@
 #include <iostream>
 #include <map>
 #include <vector>
+#include <cmath>
 
 // define constants needed here
 #define MULTIBODY_DT 0.1
@@ -256,7 +257,8 @@ int runMain() {
 
   math::RigidTransform<double> schunk_pose =
       math::RigidTransform<double>::Identity();
-  drake::Vector3<double> schunk_t(0, 0, 0);
+  drake::Vector3<double> schunk_t;
+  schunk_t << 0, 0, 0;
   schunk_pose.set_rotation(math::RollPitchYaw<double>(M_PI / 2, 0, 0));
   schunk_pose.set_translation(schunk_t);
 
@@ -265,11 +267,13 @@ int runMain() {
       math::RigidTransform<double>::Identity();
   brick_pose0.set_translation(brick_t);
 
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"),
-                   brick_pose0);
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base_link"));
+  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
   plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee_kuka"),
                    plant.GetFrameByName("body", gripper_instance), schunk_pose);
+
+  plant.WeldFrames(plant.world_frame(),
+                   plant.GetFrameByName("base_link", brick_instance),
+                   brick_pose0);
   plant.Finalize();
 
   TrajHashBrown X_O{
@@ -304,8 +308,9 @@ int runMain() {
   Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  kp.fill(1e-14); // PD controller
-  kd.fill(1);
+  kp.fill(100); // PD controller
+  ki.fill(1);
+  kd.fill(2*std::sqrt(100));
 
   auto armController =
       builder
@@ -360,7 +365,7 @@ int runMain() {
   simulator.set_target_realtime_rate(1);
   simulator.Initialize();
 
-  simulator.AdvanceTo(traj.get_position_trajectory().end_time());
+  simulator.AdvanceTo(300);
   return 0;
 }
 
