@@ -23,13 +23,16 @@
 
 #include <drake/systems/analysis/simulator.h>
 #include <drake/systems/controllers/inverse_dynamics_controller.h>
+
 #include <drake/systems/framework/basic_vector.h>
 #include <drake/systems/framework/diagram.h>
 #include <drake/systems/framework/diagram_builder.h>
 #include <drake/systems/framework/leaf_system.h>
 #include <drake/systems/framework/basic_vector.h>
+
 #include <drake/systems/primitives/constant_vector_source.h>
 #include <drake/systems/primitives/trajectory_source.h>
+#include <drake/systems/primitives/integrator.h>
 
 #include <drake/geometry/drake_visualizer.h>
 
@@ -91,30 +94,28 @@ TimeHashBrown makeGripperFrames(TrajHashBrown& X_G, TrajHashBrown X_O)
 
     // timing
     TimeHashBrown times{{"initial", 0}};
-    math::RigidTransform<double> X_GinitialGprepick =
-        X_G["initial"].inverse() * X_G["prepick"];
-    times["prepick"] =
-        times["initial"] + 10 + X_GinitialGprepick.translation().norm();
+    math::RigidTransform<double> X_GinitialGprepick = X_G["initial"].inverse() * X_G["prepick"];
+    times["prepick"] = times["initial"] + 10 + X_GinitialGprepick.translation().norm();
 
-    times["pick_start"] = times["prepick"] + 2;
-    times["pick_end"] = times["pick_start"] + 2;
+    times["pick_start"] = times["prepick"] + 2.0;
+    times["pick_end"] = times["pick_start"] + 2.0;
     X_G["pick_start"] = X_G["pick"];
     X_G["pick_end"] = X_G["pick"];
-    times["postpick"] = times["pick_end"] + 2;
+    times["postpick"] = times["pick_end"] + 2.0;
     X_G["postpick"] = X_G["prepick"];
 
-    double timeToFromClearance = 10 + X_GprepickGclearance.translation().norm();
+    double timeToFromClearance = 10.0 * X_GprepickGclearance.translation().norm();
     times["clearance"] = times["postpick"] + timeToFromClearance;
     times["preplace"] = times["clearance"] + timeToFromClearance;
-    times["place_start"] = times["preplace"] + 2;
-    times["place_end"] = times["place_start"] + 2;
+    times["place_start"] = times["preplace"] + 2.0;
+    times["place_end"] = times["place_start"] + 2.0;
     X_G["place_start"] = X_G["place"];
     X_G["place_end"] = X_G["place"];
     times["postplace"] = times["place_end"] + 2.0;
     X_G["postplace"] = X_G["preplace"];
     // std::cout << times["postplace"] << std::endl;    
 
-    return times;
+    return times;        
 }
 
 /**
@@ -124,15 +125,16 @@ trajectories::PiecewisePose<double> MakeGripperPoseTrajectory(const TrajHashBrow
 {
     std::vector<double> times_vec;
     std::vector<math::RigidTransform<double>> pose_vec;
-
-    for (const auto& keyval : X_G)
+    std::vector<std::string> names = {"initial", "prepick","pick_start","pick_end","postpick","clearance","preplace","place_start","place_end","postplace"};
+    for (const std::string& name : names)
     {
-        pose_vec.push_back(keyval.second);
-        times_vec.push_back(times[keyval.first]); //hope to god it doesn't crash
+        pose_vec.push_back(X_G.at(name));
+        times_vec.push_back(times.at(name)); //hope to god it doesn't crash
     }
 
     return trajectories::PiecewisePose<double>::MakeLinear(times_vec, pose_vec);
 }
+
 
 class PseudoInverseController : public systems::LeafSystem<double>
 {
@@ -149,7 +151,7 @@ class PseudoInverseController : public systems::LeafSystem<double>
         V_G_port = &(DeclareVectorInputPort("V_WG", 6));
 
         //input port 1 have size 7
-        q_port = &(DeclareVectorInputPort("iiwa_position", 7));
+        q_port = &(DeclareVectorInputPort("iiwa_position", 14));
 
         DeclareVectorOutputPort("iiwa_velocity", 7, &PseudoInverseController::CalcOutput);
 
@@ -163,6 +165,8 @@ class PseudoInverseController : public systems::LeafSystem<double>
     {
         auto V_G = V_G_port->Eval(context);
         auto q = q_port->Eval(context);
+        q = q(Eigen::seq(0,7)); //take first 7 (position);
+
         plant_->SetPositions(context_.get(), iiwa_, q);
         drake::EigenPtr<MatrixX<double>> J_G;
 
@@ -238,7 +242,15 @@ int runMain() {
   V_G_source->set_name("v_WG");
 
   //pseudoinversecontroller IMPLEMENT
-//   auto controller = builder.AddSystem()
+  auto controller = builder.AddSystem<PseudoInverseController>(plant);
+  controller->set_name("PseudoInverseController");
+
+  auto integrator = builder.AddSystem<systems::Integrator<double>>(7);
+  integrator.set_name("integrator");
+
+  builder.Connect(V_G_source->get_output_port(), controller->GetInputPort("V_WG"));
+  builder.Connect(controller->get_output_port(), integrator->get_input_port());
+  builder.Connect(integrator->get_output_port(), plant
 
   plant.Finalize();
 
