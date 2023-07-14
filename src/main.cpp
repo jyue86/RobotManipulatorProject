@@ -51,7 +51,7 @@
 #include <vector>
 
 // define constants needed here
-#define MULTIBODY_DT 0.002
+#define MULTIBODY_DT 0.1
 #define ARM_PATH                                                               \
   "drake/manipulation/models/iiwa_description/urdf/"                           \
   "iiwa14_polytope_collision.urdf"
@@ -168,14 +168,13 @@ private:
     auto V_G = V_G_port->Eval(context);
     auto qq = q_port->Eval(context);
     auto q = qq(Eigen::seq(0, 6));
-    std::cout << "Q size: " << q.size() << std::endl;
+    // std::cout << "Q size: " << q.size() << std::endl;
     // q = q(Eigen::seq(0, 7)); // take first 7 (position);
 
-    int numCols = 15;
     plant_->SetPositions(context_.get(), iiwa_, q);
-    std::cout << numCols << std::endl;
-    MatrixX<double> J_G = MatrixX<double>(6, numCols);
-    std::cout << "Cols: " << J_G.cols() << std::endl;
+    // std::cout << plant_->num_velocities() << std::endl;
+    MatrixX<double> J_G = MatrixX<double>(6, plant_->num_velocities());
+    // std::cout << "Cols: " << J_G.cols() << std::endl;
 
     drake::Vector3<double> zeros;
     zeros << 0, 0, 0;
@@ -184,17 +183,13 @@ private:
                                         zeros, *W_, *W_, &J_G);
 
     auto J_G_val = J_G;
-    std::cout << "J_G val:" << J_G_val << std::endl;
-    auto realJ_G = J_G_val(Eigen::all, Eigen::seq(6, plant_->num_velocities()));
-    std::cout << "Real J_G:" << realJ_G << std::endl;
+    // std::cout << "J_G val:" << J_G_val << std::endl;
+    auto realJ_G = J_G_val(Eigen::all, Eigen::seq(iiwa_start, iiwa_end));
+    // std::cout << "Real J_G:" << realJ_G << std::endl;
 
-    // auto v = (realJ_G.transpose() * realJ_G)
-    //              .completeOrthogonalDecomposition()
-    //              .pseudoInverse() *
-    //          realJ_G.transpose() * V_G;
     auto v = realJ_G.completeOrthogonalDecomposition().pseudoInverse() * V_G;
-    std::cout << "Basic Vector shape: " << v.size() << std::endl;
-    std::cout << "V: " << v << std::endl;
+    // std::cout << "Basic Vector shape: " << v.size() << std::endl;
+    // std::cout << "V: " << v << std::endl;
     output->SetFromVector(v);
   }
 
@@ -259,8 +254,6 @@ int runMain() {
   auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
   auto brick_instance = parser.AddModels(brick_sdf).at(0);
 
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base_link"));
 
   math::RigidTransform<double> schunk_pose =
       math::RigidTransform<double>::Identity();
@@ -272,6 +265,9 @@ int runMain() {
   math::RigidTransform<double> brick_pose0 =
       math::RigidTransform<double>::Identity();
   brick_pose0.set_translation(brick_t);
+
+  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
+  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base_link"));
   plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee_kuka"),
                    plant.GetFrameByName("body", gripper_instance), schunk_pose);
   plant.Finalize();
@@ -307,13 +303,16 @@ int runMain() {
   auto intermediateSys = builder.AddSystem<DummyPosVel>();
   intermediateSys->set_name("IntermediateSys");
 
-  VectorX<double> genericPIDValues(7);
-  genericPIDValues << 1, 1, 1, 1, 1, 1, 1;
+  Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
+  Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
+  Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
+  kp.fill(10); // PD controller
+  kd.fill(1);
 
   auto armController =
       builder
           .AddSystem<systems::controllers::InverseDynamicsController<double>>(
-              plant_arm, genericPIDValues, genericPIDValues, genericPIDValues,
+              plant_arm, kp,ki,kd,
               false);
   auto gripperDesiredStateSource =
       builder.AddSystem<systems::ConstantVectorSource<double>>(
@@ -357,7 +356,7 @@ int runMain() {
   simulator.set_target_realtime_rate(1);
   simulator.Initialize();
 
-  simulator.AdvanceTo(300);
+  simulator.AdvanceTo(traj.get_position_trajectory().end_time());
   return 0;
 }
 
