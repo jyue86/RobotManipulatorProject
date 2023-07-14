@@ -254,7 +254,6 @@ int runMain() {
   auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
   auto brick_instance = parser.AddModels(brick_sdf).at(0);
 
-
   math::RigidTransform<double> schunk_pose =
       math::RigidTransform<double>::Identity();
   drake::Vector3<double> schunk_t(0, 0, 0);
@@ -312,8 +311,7 @@ int runMain() {
   auto armController =
       builder
           .AddSystem<systems::controllers::InverseDynamicsController<double>>(
-              plant_arm, kp,ki,kd,
-              false);
+              plant_arm, kp, ki, kd, false);
   auto gripperDesiredStateSource =
       builder.AddSystem<systems::ConstantVectorSource<double>>(
           systems::BasicVector<double>{0, 0});
@@ -351,6 +349,13 @@ int runMain() {
   auto sys = builder.Build();
 
   systems::Simulator<double> simulator(*sys);
+  // systems::Context<double> *context = &simulator.get_mutable_context();
+  systems::Context<double> &context = simulator.get_mutable_context();
+  systems::Context<double> *contextPtr =
+      &(integrator->GetMyMutableContextFromRoot(&context));
+  integrator->set_integral_value(
+      contextPtr, plant.GetPositions(plant.GetMyContextFromRoot(context),
+                                     plant.GetModelInstanceByName("iiwa14")));
 
   simulator.set_publish_every_time_step(false);
   simulator.set_target_realtime_rate(1);
