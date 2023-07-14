@@ -260,18 +260,17 @@ int runMain() {
   schunk_pose.set_rotation(math::RollPitchYaw<double>(M_PI / 2, 0, 0));
   schunk_pose.set_translation(schunk_t);
 
-  drake::Vector3<double> brick_t(0.65, 0.65, 0);
+  drake::Vector3<double> brick_t(0.35, 0.35, 0);
   math::RigidTransform<double> brick_pose0 =
       math::RigidTransform<double>::Identity();
   brick_pose0.set_translation(brick_t);
 
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
+  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"),
+                   brick_pose0);
   plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base_link"));
   plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee_kuka"),
                    plant.GetFrameByName("body", gripper_instance), schunk_pose);
   plant.Finalize();
-
-  std::cout << "Num velocities:" << plant.num_velocities() << std::endl;
 
   TrajHashBrown X_O{
       {"initial", brick_pose0},
@@ -305,7 +304,7 @@ int runMain() {
   Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  kp.fill(10); // PD controller
+  kp.fill(1e-14); // PD controller
   kd.fill(1);
 
   auto armController =
