@@ -110,7 +110,9 @@ int runMain() {
   Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  kp.fill(0.3); // PD controller
+  kp.fill(100); // PD controller
+  ki.fill(0);
+  kd.fill(2*10);
   auto controller =
       builder
           .AddSystem<systems::controllers::InverseDynamicsController<double>>(
@@ -120,14 +122,16 @@ int runMain() {
 
   drake::VectorX<double> q_des(kIiwaArmNumJoints);
   q_des.fill(1);
-  drake::VectorX<double> v_des(kIiwaArmNumJoints);
-  v_des.fill(0.0);
-  drake::VectorX<double> desired_state_input(2 * kIiwaArmNumJoints);
-  desired_state_input << q_des, v_des;
+
+  auto desired_state_from_position = builder.AddSystem<
+        systems::StateInterpolatorWithDiscreteDerivative>(
+            7, plant.time_step(),
+            true /* suppress_initial_transient */);
+  desired_state_from_position->set_name("desired_state_from_position");
 
   auto desired_state_source =
       builder.AddSystem<systems::ConstantVectorSource<double>>(
-          desired_state_input);
+          q_des);
   desired_state_source->set_name("desired_state_constant");
   auto gripperDesiredStateSource =
       builder.AddSystem<systems::ConstantVectorSource<double>>(
@@ -142,6 +146,8 @@ int runMain() {
                   plant.get_actuation_input_port(arm_instance));
 
   builder.Connect(desired_state_source->get_output_port(),
+                  desired_state_from_position->get_input_port());
+  builder.Connect(desired_state_from_position->get_output_port(),
                   controller->get_input_port_desired_state());
 
   manipulation::schunk_wsg::SchunkWsgPdController gripperController;
