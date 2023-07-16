@@ -101,23 +101,23 @@ TimeHashBrown makeGripperFrames(TrajHashBrown &X_G, TrajHashBrown X_O) {
   math::RigidTransform<double> X_GinitialGprepick =
       X_G["initial"].inverse() * X_G["prepick"];
   times["prepick"] =
-      times["initial"] + 10 + X_GinitialGprepick.translation().norm();
+      times["initial"] + 10 * X_GinitialGprepick.translation().norm() + 30;
 
-  times["pick_start"] = times["prepick"] + 2.0;
-  times["pick_end"] = times["pick_start"] + 2.0;
+  times["pick_start"] = times["prepick"] + 2.0 + 10.0;
+  times["pick_end"] = times["pick_start"] + 2.0 + 10.0;
   X_G["pick_start"] = X_G["pick"];
   X_G["pick_end"] = X_G["pick"];
-  times["postpick"] = times["pick_end"] + 2.0;
+  times["postpick"] = times["pick_end"] + 2.0 + 10.0;
   X_G["postpick"] = X_G["prepick"];
 
   double timeToFromClearance = 10.0 * X_GprepickGclearance.translation().norm();
-  times["clearance"] = times["postpick"] + timeToFromClearance;
-  times["preplace"] = times["clearance"] + timeToFromClearance;
-  times["place_start"] = times["preplace"] + 2.0;
-  times["place_end"] = times["place_start"] + 2.0;
+  times["clearance"] = times["postpick"] + timeToFromClearance + 10.0;
+  times["preplace"] = times["clearance"] + timeToFromClearance + 10.0;
+  times["place_start"] = times["preplace"] + 2.0 + 10.0;
+  times["place_end"] = times["place_start"] + 2.0 + 10.0;
   X_G["place_start"] = X_G["place"];
   X_G["place_end"] = X_G["place"];
-  times["postplace"] = times["place_end"] + 2.0;
+  times["postplace"] = times["place_end"] + 2.0 + 10.0;
   X_G["postplace"] = X_G["preplace"];
   // std::cout << times["postplace"] << std::endl;
 
@@ -134,6 +134,8 @@ MakeGripperPoseTrajectory(const TrajHashBrown &X_G, TimeHashBrown &times) {
   for (const std::string &name : names) {
     pose_vec.push_back(X_G.at(name));
     times_vec.push_back(times.at(name)); // hope to god it doesn't crash
+    std::cout << "matrix:\n" << X_G.at(name) << std::endl;
+    std::cout << "times_vec: " << times.at(name) << std::endl;
   }
 
   return trajectories::PiecewisePose<double>::MakeLinear(times_vec, pose_vec);
@@ -141,7 +143,7 @@ MakeGripperPoseTrajectory(const TrajHashBrown &X_G, TimeHashBrown &times) {
 
 class PseudoInverseController : public systems::LeafSystem<double> {
 public:
-  PseudoInverseController(multibody::MultibodyPlant<double> &plant) {
+  PseudoInverseController(multibody::MultibodyPlant<double>& plant) {
     plant_ = &plant;
     context_ = plant.CreateDefaultContext();
     iiwa_ = plant.GetModelInstanceByName("iiwa14");
@@ -167,7 +169,7 @@ private:
     auto V_G = V_G_port->Eval(context);
     auto qq = q_port->Eval(context);
     auto q = qq(Eigen::seq(0, 6));
-    // std::cout << "Q size: " << q.size() << std::endl;
+    std::cout << "Q: \n" << qq << std::endl;
     // q = q(Eigen::seq(0, 7)); // take first 7 (position);
 
     plant_->SetPositions(context_.get(), iiwa_, q);
@@ -184,11 +186,13 @@ private:
     auto J_G_val = J_G;
     // std::cout << "J_G val:" << J_G_val << std::endl;
     auto realJ_G = J_G_val(Eigen::all, Eigen::seq(iiwa_start, iiwa_end));
-    // std::cout << "Real J_G:" << realJ_G << std::endl;
+    std::cout << "Real J_G: \n  " << realJ_G << std::endl;
 
-    auto v = realJ_G.completeOrthogonalDecomposition().pseudoInverse() * V_G;
+    auto pinv = realJ_G.completeOrthogonalDecomposition().pseudoInverse();
+    // std::cout << pinv << std::endl << std::endl;
+    auto v = pinv * V_G;
     // std::cout << "Basic Vector shape: " << v.size() << std::endl;
-    std::cout << "V: \n" << v << std::endl;
+    // std::cout << "V: \n" << v << std::endl;
     output->SetFromVector(v);
   }
 
@@ -221,7 +225,7 @@ private:
 
     VectorX<double> vecJoined(q.size() + v.size());
     vecJoined << q, v;
-    std::cout << "command vector:\n" << vecJoined << std::endl;
+    // std::cout << "command vector:\n" << vecJoined << std::endl;
     output->SetFromVector(vecJoined);
   }
 
@@ -254,12 +258,15 @@ int runMain() {
   auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
   auto brick_instance = parser.AddModels(brick_sdf).at(0);
 
-  math::RigidTransform<double> schunk_pose =
-      math::RigidTransform<double>::Identity();
-  drake::Vector3<double> schunk_t;
-  schunk_t << 0, 0, 0;
-  schunk_pose.set_rotation(math::RollPitchYaw<double>(M_PI/2, 0, 0));
-  schunk_pose.set_translation(schunk_t);
+  // math::RigidTransform<double> schunk_pose =
+  //     math::RigidTransform<double>::Identity();
+  // drake::Vector3<double> schunk_t;
+  // schunk_t << 0, 0, 0;
+  // schunk_pose.set_rotation(math::RollPitchYaw<double>(M_PI/2, 0, 0));
+  // schunk_pose.set_translation(schunk_t);
+
+  const math::RigidTransform<double> X_7G(math::RollPitchYaw<double>(M_PI_2, 0, M_PI_2),
+                                    Eigen::Vector3d(0, 0, 0.114));
 
   drake::Vector3<double> brick_t(1, 0.35, 0);
   math::RigidTransform<double> brick_pose0 =
@@ -267,8 +274,8 @@ int runMain() {
   brick_pose0.set_translation(brick_t);
 
   plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
-  plant.WeldFrames(plant.GetFrameByName("iiwa_link_ee_kuka"),
-                   plant.GetFrameByName("body", gripper_instance), schunk_pose);
+  plant.WeldFrames(plant.GetFrameByName("iiwa_link_7"),
+                   plant.GetFrameByName("body", gripper_instance), X_7G);
 
   // plant.WeldFrames(plant.world_frame(),
   //                  plant.GetFrameByName("base_link", brick_instance),
@@ -294,7 +301,7 @@ int runMain() {
   trajectories::PiecewisePose<double> traj =
       MakeGripperPoseTrajectory(X_G, times);
   std::unique_ptr<trajectories::Trajectory<double>> traj_V_G =
-      traj.MakeDerivative();
+      traj.MakeDerivative(); 
 
   auto V_G_source =
       builder.AddSystem<systems::TrajectorySource<double>>(*traj_V_G.get());
@@ -313,13 +320,11 @@ int runMain() {
   desired_state_from_position->set_name("desired_state_from_position");
   
 
-  Eigen::VectorXd zv = Eigen::VectorXd::Zero(7);
-  auto zero_V_source = builder.AddSystem<systems::ConstantVectorSource>(zv);
-  Eigen::VectorXd ov = Eigen::VectorXd::Ones(7);
-  auto one_V_source = builder.AddSystem<systems::ConstantVectorSource>(ov);
+  // Eigen::VectorXd zv = Eigen::VectorXd::Zero(7);
+  // auto zero_V_source = builder.AddSystem<systems::ConstantVectorSource>(zv);
+  // Eigen::VectorXd ov = Eigen::VectorXd::Ones(7);
+  // auto one_V_source = builder.AddSystem<systems::ConstantVectorSource>(ov);
 
-  // auto intermediateSys = builder.AddSystem<DummyPosVel>();
-  // intermediateSys->set_name("IntermediateSys");
 
   Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
@@ -351,15 +356,6 @@ int runMain() {
   builder.Connect(plant.get_state_output_port(arm_instance),
                   controller->GetInputPort("iiwa_position"));
   builder.Connect(controller->get_output_port(), integrator->get_input_port());
-  // builder.Connect(integrator->get_output_port(),
-  //                 intermediateSys->GetInputPort("iiwa_position"));  
-  // builder.Connect(controller->get_output_port(),
-  //                 intermediateSys->GetInputPort("iiwa_velocity"));
-  // builder.Connect(zero_V_source->get_output_port(),
-  //                 intermediateSys->GetInputPort("iiwa_velocity"));
-
-  // builder.Connect(intermediateSys->get_output_port(),
-  //                 armController->get_input_port_desired_state());
   builder.Connect(plant.get_state_output_port(arm_instance),
                   armController->get_input_port_estimated_state());
 
