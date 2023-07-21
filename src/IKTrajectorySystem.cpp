@@ -3,6 +3,7 @@
 #include <drake/multibody/inverse_kinematics/inverse_kinematics.h>
 #include <drake/multibody/plant/multibody_plant.h>
 #include <drake/solvers/solve.h>
+#include <drake/systems/framework/basic_vector.h>
 #include <drake/systems/framework/leaf_system.h>
 #include <iostream>
 #include <vector>
@@ -10,6 +11,9 @@
 namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
+
+using time = std::chrono::time_point<std::chrono::system_clock>;
+
 class IKTrajectorySystem : public systems::LeafSystem<double> {
 public:
   IKTrajectorySystem(
@@ -42,21 +46,38 @@ public:
 
     DeclareVectorOutputPort("iiwa_position", 7,
                             &IKTrajectorySystem::CalcOutput);
+    // DeclareVectorOutputPort("wsg_position", 2,
+    //                         &IKTrajectorySystem::ManipulateGripper);
 
     startTime_ = std::chrono::system_clock::now();
+    currentStep_ = 0;
   }
 
 private:
   void CalcOutput(const systems::Context<double> &context,
                   systems::BasicVector<double> *output) const {
-    output->set_value(positions_[0]);
+    time currentTime = std::chrono::system_clock::now();
+    int seconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      currentTime - startTime_)
+                      .count() /
+                  1000;
+
+    if (seconds < 10) {
+      output->set_value(positions_[0]);
+    } else {
+      output->set_value(positions_[1]);
+    }
   }
+
+  void ManipulateGripper(const systems::Context<double> &context,
+                         systems::BasicVector<double> *output) const {}
 
   multibody::MultibodyPlant<double> *plant_;
   multibody::ModelInstanceIndex G_;
   std::vector<Eigen::VectorX<double>> positions_;
 
-  std::chrono::time_point<std::chrono::system_clock> startTime_;
+  time startTime_;
+  int currentStep_;
 };
 } // namespace kuka_iiwa
 } // namespace manipulation
