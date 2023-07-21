@@ -52,6 +52,11 @@
 #include <vector>
 #include <cmath>
 
+#include <drake/multibody/inverse_kinematics/inverse_kinematics.h>
+#include <drake/solvers/mathematical_program.h>
+#include <drake/solvers/solve.h>
+
+
 // define constants needed here
 #define MULTIBODY_DT 0.002
 #define ARM_PATH                                                               \
@@ -112,10 +117,10 @@ int runMain() {
                    plant.GetFrameByName("body", gripper_instance), X_7G);
 
   const double static_friction = 1.0;
-  const Vector4<double> green(0.5, 1.0, 0.5, 1.0);
+  const Vector4<double> color(0.5, 1.0, 0.5, 0.0);
   plant.RegisterVisualGeometry(plant.world_body(), math::RigidTransformd(),
                                geometry::HalfSpace(), "GroundVisualGeometry",
-                               green);
+                               color);
   // For a time-stepping model only static friction is used.
   const multibody::CoulombFriction<double> ground_friction(static_friction,
                                                            static_friction);
@@ -155,6 +160,31 @@ int runMain() {
       builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>();
 
   auto armController = builder.AddSystem<systems::controllers::InverseDynamicsController<double>>(plant_arm, kp, ki, kd, false);
+
+
+  const math::RigidTransform<double> setPose(math::RollPitchYaw<double>(M_PI_2, 0, 0),
+                                    Eigen::Vector3d(0.5,0.5,0.5));
+
+  multibody::InverseKinematics ik(plant, true);
+  ik.AddPositionConstraint(plant.GetFrameByName("body", gripper_instance),
+                            Eigen::Vector3d::Zero(3),
+                            plant.world_frame(),
+                            setPose.translation(),
+                            setPose.translation());
+  ik.AddOrientationConstraint(plant.GetFrameByName("body", gripper_instance),
+                            math::RotationMatrix<double>(),
+                            plant.world_frame(),
+                            setPose.rotation(),
+                            0.0);
+  solvers::MathematicalProgram* prog = ik.get_mutable_prog();
+  solvers::VectorXDecisionVariable q = ik.q();
+  prog->AddQuadraticErrorCost(Eigen::MatrixXd::Identity(16,16), Eigen::VectorXd::Ones(16), q);
+  prog->SetInitialGuess(q, Eigen::VectorXd::Ones(16));
+  solvers::MathematicalProgramResult result = solvers::Solve(ik.prog());
+  std::cout << solvers::to_string(result.get_solution_result()) << std::endl;
+  std::cout << result.GetSolution(ik.q());
+  //monkey noises
+
 
   drake::VectorX<double> q_des(7);
   q_des.fill(1);
