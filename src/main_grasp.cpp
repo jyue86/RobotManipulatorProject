@@ -12,6 +12,8 @@
  *
  */
 
+#include "./IKTrajectorySystem.cpp"
+
 #include <drake/common/eigen_types.h>
 #include <drake/common/find_resource.h>
 
@@ -20,6 +22,8 @@
 
 #include <drake/multibody/parsing/parser.h>
 
+#include <drake/multibody/plant/multibody_plant.h>
+#include <drake/multibody/tree/multibody_tree_indexes.h>
 #include <drake/systems/analysis/simulator.h>
 #include <drake/systems/controllers/inverse_dynamics_controller.h>
 
@@ -72,13 +76,35 @@ namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
 
-void startTrajectoryCommand(math::RigidTransform<double> goalPose) {}
-
 /**
  * Get robot to follow a setpoint. (grasp)
  */
 using TrajHashBrown = std::map<std::string, math::RigidTransform<double>>;
 using TimeHashBrown = std::map<std::string, double>;
+
+Eigen::VectorX<double>
+startTrajectoryCommand(math::RigidTransform<double> goalPose,
+                       const multibody::MultibodyPlant<double> &plant,
+                       multibody::ModelInstanceIndex gripper_instance) {
+  multibody::InverseKinematics ik(plant, true);
+  ik.AddPositionConstraint(plant.GetFrameByName("body", gripper_instance),
+                           Eigen::Vector3d::Zero(3), plant.world_frame(),
+                           goalPose.translation(), goalPose.translation());
+  ik.AddOrientationConstraint(plant.GetFrameByName("body", gripper_instance),
+                              math::RotationMatrix<double>(),
+                              plant.world_frame(), goalPose.rotation(), 0.0);
+  solvers::MathematicalProgram *prog = ik.get_mutable_prog();
+  solvers::VectorXDecisionVariable q = ik.q();
+  prog->AddQuadraticErrorCost(Eigen::MatrixXd::Identity(16, 16),
+                              Eigen::VectorXd::Ones(16), q);
+  prog->SetInitialGuess(q, Eigen::VectorXd::Ones(16));
+  solvers::MathematicalProgramResult result = solvers::Solve(ik.prog());
+  Eigen::VectorXd solution = result.GetSolution(ik.q());
+
+  Eigen::VectorX<double> qVec = solution(Eigen::seq(0, 6));
+  return qVec;
+}
+
 int runMain() {
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
@@ -167,42 +193,26 @@ int runMain() {
           .AddSystem<systems::controllers::InverseDynamicsController<double>>(
               plant_arm, kp, ki, kd, false);
 
-  const math::RigidTransform<double> setPose(
+  const math::RigidTransform<double> setPose1(
       math::RollPitchYaw<double>(-M_PI_2, 0, 0),
       Eigen::Vector3d(-0.2, -0.65, 0.2));
+  const math::RigidTransform<double> setPose2(
+      math::RollPitchYaw<double>(-M_PI_2, 0, 0),
+      Eigen::Vector3d(-0.2, -0.65, 0.1));
 
-  multibody::InverseKinematics ik(plant, true);
-  ik.AddPositionConstraint(plant.GetFrameByName("body", gripper_instance),
-                           Eigen::Vector3d::Zero(3), plant.world_frame(),
-                           setPose.translation(), setPose.translation());
-  ik.AddOrientationConstraint(plant.GetFrameByName("body", gripper_instance),
-                              math::RotationMatrix<double>(),
-                              plant.world_frame(), setPose.rotation(), 0.0);
-  solvers::MathematicalProgram *prog = ik.get_mutable_prog();
-  solvers::VectorXDecisionVariable q = ik.q();
-  prog->AddQuadraticErrorCost(Eigen::MatrixXd::Identity(16, 16),
-                              Eigen::VectorXd::Ones(16), q);
-  prog->SetInitialGuess(q, Eigen::VectorXd::Ones(16));
-  solvers::MathematicalProgramResult result = solvers::Solve(ik.prog());
-  std::cout << solvers::to_string(result.get_solution_result()) << std::endl;
-  std::cout << result.GetSolution(ik.q()) << std::endl;
-  Eigen::VectorXd solution = result.GetSolution(ik.q());
-  std::cout << "Solution size: " << solution.size() << std::endl;
+  // Eigen::VectorX<double> solution =
+  //     startTrajectoryCommand(setPose, plant, gripper_instance);
+  // drake::VectorX<double> q_des(solution);
 
-  Eigen::VectorX<double> qVec = solution(Eigen::seq(0, 6));
-  std::cout << qVec.size() << std::endl;
-  // monkey noises
+  // auto desired_pos_source =
+  //     builder.AddSystem<systems::ConstantVectorSource<double>>(
+  //         desired_pos_input);
+  // desired_pos_source->set_name("desired_pos_source");
 
-  drake::VectorX<double> q_des(qVec);
-  // drake::VectorX<double> q_des(7);
-  // q_des.fill(1);
-  drake::VectorX<double> desired_pos_input(num_joints);
-  desired_pos_input << q_des;
-
-  auto desired_pos_source =
-      builder.AddSystem<systems::ConstantVectorSource<double>>(
-          desired_pos_input);
-  desired_pos_source->set_name("desired_pos_source");
+  std::vector<math::RigidTransform<double>> goalPoses{setPose1, setPose2};
+  auto ikTrajectorySys =
+      builder.AddSystem<IKTrajectorySystem>(plant, goalPoses);
+  ikTrajectorySys->set_name("ik_trajectory_system");
 
   builder.Connect(gripperDesiredStateSource->get_output_port(),
                   wsgController->get_desired_state_input_port());
@@ -213,7 +223,9 @@ int runMain() {
 
   builder.Connect(plant.get_state_output_port(arm_instance),
                   armController->get_input_port_estimated_state());
-  builder.Connect(desired_pos_source->get_output_port(),
+  // builder.Connect(desired_pos_source->get_output_port(),
+  //                 desired_state_from_position->get_input_port());
+  builder.Connect(ikTrajectorySys->get_output_port(),
                   desired_state_from_position->get_input_port());
 
   builder.Connect(armController->get_output_port_control(),
