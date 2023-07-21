@@ -71,7 +71,8 @@ namespace kuka_iiwa {
 /**
  * Get robot to follow a setpoint. (grasp)
 */
-
+using TrajHashBrown = std::map<std::string, math::RigidTransform<double>>;
+using TimeHashBrown = std::map<std::string, double>;
 int runMain() {
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
@@ -101,7 +102,7 @@ int runMain() {
   const math::RigidTransform<double> X_7G(math::RollPitchYaw<double>(M_PI_2, 0, M_PI_2),
                                     Eigen::Vector3d(0, 0, 0.114));
 
-  drake::Vector3<double> brick_t(1, 0.35, 0);
+  drake::Vector3<double> brick_t(-0.25, 0.65, 0);
   math::RigidTransform<double> brick_pose0 =
       math::RigidTransform<double>::Identity();
   brick_pose0.set_translation(brick_t);
@@ -110,7 +111,24 @@ int runMain() {
   plant.WeldFrames(plant.GetFrameByName("iiwa_link_7"),
                    plant.GetFrameByName("body", gripper_instance), X_7G);
 
+  const double static_friction = 1.0;
+  const Vector4<double> green(0.5, 1.0, 0.5, 1.0);
+  plant.RegisterVisualGeometry(plant.world_body(), math::RigidTransformd(),
+                               geometry::HalfSpace(), "GroundVisualGeometry",
+                               green);
+  // For a time-stepping model only static friction is used.
+  const multibody::CoulombFriction<double> ground_friction(static_friction,
+                                                           static_friction);
+  plant.RegisterCollisionGeometry(plant.world_body(), math::RigidTransformd(),
+                                  geometry::HalfSpace(),
+                                  "GroundCollisionGeometry", ground_friction);
+  TrajHashBrown X_O{
+      {"initial", math::RigidTransform<double>(math::RotationMatrixd::MakeZRotation(M_PI / 2) , Vector3<double>(-0.2, -0.65, 0.0))},
+      {"goal", math::RigidTransform<double>(math::RotationMatrixd::MakeZRotation(M_PI) , Vector3<double>(0.5, 0.0, 0.0))}
+  };
+  
   plant.Finalize();
+  plant.SetDefaultFreeBodyPose(plant.GetBodyByName("base_link"), X_O["initial"]);
   const int num_joints = plant_arm.num_positions();
 
 
