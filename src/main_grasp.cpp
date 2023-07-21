@@ -29,9 +29,9 @@
 #include <drake/systems/framework/leaf_system.h>
 
 #include <drake/systems/primitives/constant_vector_source.h>
+#include <drake/systems/primitives/discrete_derivative.h>
 #include <drake/systems/primitives/integrator.h>
 #include <drake/systems/primitives/trajectory_source.h>
-#include <drake/systems/primitives/discrete_derivative.h>
 
 #include <drake/geometry/drake_visualizer.h>
 
@@ -46,16 +46,15 @@
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
+#include <cmath>
 #include <drake/common/trajectories/piecewise_pose.h>
 #include <iostream>
 #include <map>
 #include <vector>
-#include <cmath>
 
 #include <drake/multibody/inverse_kinematics/inverse_kinematics.h>
 #include <drake/solvers/mathematical_program.h>
 #include <drake/solvers/solve.h>
-
 
 // define constants needed here
 #define MULTIBODY_DT 0.002
@@ -73,9 +72,11 @@ namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
 
+void startTrajectoryCommand(math::RigidTransform<double> goalPose) {}
+
 /**
  * Get robot to follow a setpoint. (grasp)
-*/
+ */
 using TrajHashBrown = std::map<std::string, math::RigidTransform<double>>;
 using TimeHashBrown = std::map<std::string, double>;
 int runMain() {
@@ -103,9 +104,9 @@ int runMain() {
   auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
   auto brick_instance = parser.AddModels(brick_sdf).at(0);
 
-
-  const math::RigidTransform<double> X_7G(math::RollPitchYaw<double>(M_PI_2, 0, M_PI_2),
-                                    Eigen::Vector3d(0, 0, 0.114));
+  const math::RigidTransform<double> X_7G(
+      math::RollPitchYaw<double>(M_PI_2, 0, M_PI_2),
+      Eigen::Vector3d(0, 0, 0.114));
 
   drake::Vector3<double> brick_t(-0.25, 0.65, 0);
   math::RigidTransform<double> brick_pose0 =
@@ -128,30 +129,32 @@ int runMain() {
                                   geometry::HalfSpace(),
                                   "GroundCollisionGeometry", ground_friction);
   TrajHashBrown X_O{
-      {"initial", math::RigidTransform<double>(math::RotationMatrixd::MakeZRotation(M_PI / 2) , Vector3<double>(-0.2, -0.65, 0.0))},
-      {"goal", math::RigidTransform<double>(math::RotationMatrixd::MakeZRotation(M_PI) , Vector3<double>(0.5, 0.0, 0.0))}
-  };
-  
+      {"initial", math::RigidTransform<double>(
+                      math::RotationMatrixd::MakeZRotation(M_PI / 2),
+                      Vector3<double>(-0.2, -0.65, 0.0))},
+      {"goal",
+       math::RigidTransform<double>(math::RotationMatrixd::MakeZRotation(M_PI),
+                                    Vector3<double>(0.5, 0.0, 0.0))}};
+
   plant.Finalize();
-  plant.SetDefaultFreeBodyPose(plant.GetBodyByName("base_link"), X_O["initial"]);
+  plant.SetDefaultFreeBodyPose(plant.GetBodyByName("base_link"),
+                               X_O["initial"]);
   const int num_joints = plant_arm.num_positions();
 
-
-  auto desired_state_from_position = builder.AddSystem<
-        systems::StateInterpolatorWithDiscreteDerivative>(
-            7, plant.time_step(),
-            true /* suppress_initial_transient */);
+  auto desired_state_from_position =
+      builder.AddSystem<systems::StateInterpolatorWithDiscreteDerivative>(
+          7, plant.time_step(), true /* suppress_initial_transient */);
   desired_state_from_position->set_name("desired_state_from_position");
 
-  //base controller for robot
+  // base controller for robot
   Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   Eigen::VectorXd ki = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
-  Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);  
+  Eigen::VectorXd kd = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
   kp.fill(100); // PD controller
   ki.fill(0);
   kd.fill(200);
 
-  //setting up gripper contrlyoller (doesn't really do anything)
+  // setting up gripper contrlyoller (doesn't really do anything)
   auto gripperDesiredStateSource =
       builder.AddSystem<systems::ConstantVectorSource<double>>(
           systems::BasicVector<double>{0, 0});
@@ -159,39 +162,46 @@ int runMain() {
   auto wsgController =
       builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>();
 
-  auto armController = builder.AddSystem<systems::controllers::InverseDynamicsController<double>>(plant_arm, kp, ki, kd, false);
+  auto armController =
+      builder
+          .AddSystem<systems::controllers::InverseDynamicsController<double>>(
+              plant_arm, kp, ki, kd, false);
 
-
-  const math::RigidTransform<double> setPose(math::RollPitchYaw<double>(M_PI_2, 0, 0),
-                                    Eigen::Vector3d(0.5,0.5,0.5));
+  const math::RigidTransform<double> setPose(
+      math::RollPitchYaw<double>(-M_PI_2, 0, 0),
+      Eigen::Vector3d(-0.2, -0.65, 0.2));
 
   multibody::InverseKinematics ik(plant, true);
   ik.AddPositionConstraint(plant.GetFrameByName("body", gripper_instance),
-                            Eigen::Vector3d::Zero(3),
-                            plant.world_frame(),
-                            setPose.translation(),
-                            setPose.translation());
+                           Eigen::Vector3d::Zero(3), plant.world_frame(),
+                           setPose.translation(), setPose.translation());
   ik.AddOrientationConstraint(plant.GetFrameByName("body", gripper_instance),
-                            math::RotationMatrix<double>(),
-                            plant.world_frame(),
-                            setPose.rotation(),
-                            0.0);
-  solvers::MathematicalProgram* prog = ik.get_mutable_prog();
+                              math::RotationMatrix<double>(),
+                              plant.world_frame(), setPose.rotation(), 0.0);
+  solvers::MathematicalProgram *prog = ik.get_mutable_prog();
   solvers::VectorXDecisionVariable q = ik.q();
-  prog->AddQuadraticErrorCost(Eigen::MatrixXd::Identity(16,16), Eigen::VectorXd::Ones(16), q);
+  prog->AddQuadraticErrorCost(Eigen::MatrixXd::Identity(16, 16),
+                              Eigen::VectorXd::Ones(16), q);
   prog->SetInitialGuess(q, Eigen::VectorXd::Ones(16));
   solvers::MathematicalProgramResult result = solvers::Solve(ik.prog());
   std::cout << solvers::to_string(result.get_solution_result()) << std::endl;
-  std::cout << result.GetSolution(ik.q());
-  //monkey noises
+  std::cout << result.GetSolution(ik.q()) << std::endl;
+  Eigen::VectorXd solution = result.GetSolution(ik.q());
+  std::cout << "Solution size: " << solution.size() << std::endl;
 
+  Eigen::VectorX<double> qVec = solution(Eigen::seq(0, 6));
+  std::cout << qVec.size() << std::endl;
+  // monkey noises
 
-  drake::VectorX<double> q_des(7);
-  q_des.fill(1);
+  drake::VectorX<double> q_des(qVec);
+  // drake::VectorX<double> q_des(7);
+  // q_des.fill(1);
   drake::VectorX<double> desired_pos_input(num_joints);
   desired_pos_input << q_des;
 
-  auto desired_pos_source = builder.AddSystem<systems::ConstantVectorSource<double>>(desired_pos_input);
+  auto desired_pos_source =
+      builder.AddSystem<systems::ConstantVectorSource<double>>(
+          desired_pos_input);
   desired_pos_source->set_name("desired_pos_source");
 
   builder.Connect(gripperDesiredStateSource->get_output_port(),
@@ -203,20 +213,21 @@ int runMain() {
 
   builder.Connect(plant.get_state_output_port(arm_instance),
                   armController->get_input_port_estimated_state());
-  builder.Connect(desired_pos_source->get_output_port(), desired_state_from_position->get_input_port());
+  builder.Connect(desired_pos_source->get_output_port(),
+                  desired_state_from_position->get_input_port());
 
   builder.Connect(armController->get_output_port_control(),
                   plant.get_actuation_input_port(arm_instance));
-                  
+
   builder.Connect(desired_state_from_position->get_output_port(),
-                    armController->get_input_port_desired_state());
+                  armController->get_input_port_desired_state());
 
   // start visual + simulation
   geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
 
   auto sys = builder.Build();
 
-  systems::Simulator<double> simulator(*sys);  
+  systems::Simulator<double> simulator(*sys);
 
   simulator.set_publish_every_time_step(false);
   simulator.set_target_realtime_rate(1);
