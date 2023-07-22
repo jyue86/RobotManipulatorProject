@@ -192,8 +192,8 @@ int runMain() {
           systems::BasicVector<double>{0.1, 0.1});
   gripperDesiredStateSource->set_name("gripper_desired_state_constant");
   auto wsgController =
-      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>(
-          0.01, 0.0005);
+      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>(10,
+                                                                         0.5);
 
   auto armController =
       builder
@@ -202,12 +202,16 @@ int runMain() {
 
   const math::RigidTransform<double> setPose1(
       math::RollPitchYaw<double>(-M_PI_2, 0, 0),
-      Eigen::Vector3d(-0.2, -0.65, 0.4));
+      Eigen::Vector3d(-0.2, -0.65, 0.2));
   const math::RigidTransform<double> setPose2(
       math::RollPitchYaw<double>(-M_PI_2, 0, 0),
-      Eigen::Vector3d(-0.2, -0.65, 0.15));
+      Eigen::Vector3d(-0.2, -0.65, 0.135));
+  const math::RigidTransform<double> setPose3(
+      math::RollPitchYaw<double>(-M_PI_2, 0, 0),
+      Eigen::Vector3d(-0.2, -0.35, 0.2));
 
-  std::vector<math::RigidTransform<double>> goalPoses{setPose1, setPose2};
+  std::vector<math::RigidTransform<double>> goalPoses{setPose1, setPose2,
+                                                      setPose3};
   auto ikTrajectorySys =
       builder.AddSystem<IKTrajectorySystem>(plant, goalPoses);
   ikTrajectorySys->set_name("ik_trajectory_system");

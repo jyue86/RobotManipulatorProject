@@ -94,13 +94,20 @@ private:
                   1000;
 
     if (seconds < 10) {
+      std::cout << "Stage 1" << std::endl;
       output->set_value(positions_[0]);
     } else if (seconds < 15) {
+      std::cout << "Stage 2" << std::endl;
       output->set_value(positions_[1]);
     } else if (seconds < 20) {
+      std::cout << "Stage 3" << std::endl;
       output->set_value(positions_[1]);
-    } else {
+    } else if (seconds < 25) {
+      std::cout << "Stage 4" << std::endl;
       output->set_value(positions_[0]);
+    } else {
+      std::cout << "Stage 5" << std::endl;
+      output->set_value(positions_[2]);
     }
   }
 
@@ -117,10 +124,12 @@ private:
     } else if (seconds < 15) {
       output->set_value(Eigen::Vector2d(0.1, 0.1));
     } else if (seconds < 20) {
-      // std::cout << "GRIPPER BETTER CLOSE" << std::endl;
-      output->set_value(Eigen::Vector2d(0, 0));
+      std::cout << "GRIPPER BETTER CLOSE" << std::endl;
+      output->set_value(Eigen::Vector2d(-0.5, -0.5));
+    } else if (seconds < 30) {
+      output->set_value(Eigen::Vector2d(-0.5, -0.5));
     } else {
-      output->set_value(Eigen::Vector2d(0.05, 0.05));
+      output->set_value(Eigen::Vector2d(0.1, 0.1));
     }
   }
 
