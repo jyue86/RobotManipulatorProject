@@ -15,6 +15,7 @@
 #include <drake/common/eigen_types.h>
 #include <drake/common/find_resource.h>
 
+#include <drake/common/value.h>
 #include <drake/geometry/drake_visualizer.h>
 #include <drake/geometry/scene_graph.h>
 
@@ -28,14 +29,16 @@
 #include <drake/systems/framework/diagram_builder.h>
 #include <drake/systems/framework/leaf_system.h>
 
-#include <drake/systems/primitives/constant_vector_source.h>
-#include <drake/systems/primitives/integrator.h>
-#include <drake/geometry/render/render_camera.h>
-#include <drake/systems/sensors/rgbd_sensor.h>
 #include <drake/geometry/drake_visualizer.h>
-#include <drake/perception/depth_image_to_point_cloud.h>
+#include <drake/geometry/meshcat.h>
 #include <drake/geometry/meshcat_point_cloud_visualizer.h>
 #include <drake/geometry/meshcat_visualizer.h>
+#include <drake/geometry/render/render_camera.h>
+#include <drake/perception/depth_image_to_point_cloud.h>
+#include <drake/systems/primitives/constant_value_source.h>
+#include <drake/systems/primitives/constant_vector_source.h>
+#include <drake/systems/primitives/integrator.h>
+#include <drake/systems/sensors/rgbd_sensor.h>
 
 #include <drake/manipulation/kuka_iiwa/iiwa_constants.h>
 #include <drake/manipulation/schunk_wsg/schunk_wsg_position_controller.h>
@@ -48,10 +51,11 @@
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
+#include <cmath>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <vector>
-#include <cmath>
 
 // define constants needed here
 #define MULTIBODY_DT 0.002
@@ -71,9 +75,10 @@ namespace drake {
 namespace manipulation {
 namespace kuka_iiwa {
 
+void runMain() {
+  std::shared_ptr<geometry::Meshcat> meshCat =
+      std::make_shared<geometry::Meshcat>();
 
-void runMain()
-{
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
       multibody::AddMultibodyPlantSceneGraph(&builder, MULTIBODY_DT);
@@ -88,28 +93,28 @@ void runMain()
   auto gripper_instance = parser.AddModels(gripper_sdf).at(0);
   auto cam_instance = parser.AddModels(cam_sdf).at(0);
 
-
   const math::RigidTransform<double> X_7G(
       math::RollPitchYaw<double>(M_PI_2, 0, M_PI_2),
       Eigen::Vector3d(0, 0, 0.114));
 
   const math::RigidTransform<double> X_CAM(
-      math::RollPitchYaw<double>(0, -0.2, 0.2),
-      Eigen::Vector3d(0.5,0.1,0.2));
+      math::RollPitchYaw<double>(0, -0.2, 0.2), Eigen::Vector3d(0.5, 0.1, 0.2));
 
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base", arm_instance));
+  plant.WeldFrames(plant.world_frame(),
+                   plant.GetFrameByName("base", arm_instance));
   plant.WeldFrames(plant.GetFrameByName("iiwa_link_7"),
                    plant.GetFrameByName("body", gripper_instance), X_7G);
-  
-  plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base", cam_instance), X_CAM);
+
+  plant.WeldFrames(plant.world_frame(),
+                   plant.GetFrameByName("base", cam_instance), X_CAM);
   plant.Finalize();
 
   const int kHeight = 480;
   const int kWidth = 848;
 
   // From color camera.
-  const systems::sensors::CameraInfo intrinsics{
-      kWidth, kHeight, 616.285, 615.778, 405.418, 232.864};
+  const systems::sensors::CameraInfo intrinsics{kWidth,  kHeight, 616.285,
+                                                615.778, 405.418, 232.864};
 
   const math::RigidTransformd X_BC;
   // This is not necessarily true, but we simplify this s.t. we don't have a
@@ -117,27 +122,44 @@ void runMain()
   const math::RigidTransformd X_BD;
 
   geometry::render::ColorRenderCamera color_camera{
-      {"rgbd_sensor",
-       intrinsics,
-       {0.01, 3.0} /* clipping_range */,
-       X_BC},
+      {"rgbd_sensor", intrinsics, {0.01, 3.0} /* clipping_range */, X_BC},
       false};
   geometry::render::DepthRenderCamera depth_camera{
-      {"rgbd_sensor",
-       intrinsics,
-       {0.01, 3.0} /* clipping_range */,
-       X_BD},
+      {"rgbd_sensor", intrinsics, {0.01, 3.0} /* clipping_range */, X_BD},
       {0.1, 2.0} /* depth_range */};
 
-  auto camera = builder.AddSystem<systems::sensors::RgbdSensor>(plant.GetBodyFrameIdOrThrow(plant.GetFrameByName("base", cam_instance).body().index()),math::RigidTransform<double>(),color_camera, depth_camera);
+  auto camera = builder.AddSystem<systems::sensors::RgbdSensor>(
+      plant.GetBodyFrameIdOrThrow(
+          plant.GetFrameByName("base", cam_instance).body().index()),
+      math::RigidTransform<double>(), color_camera, depth_camera);
   camera->set_name("rgbd_sensor");
 
   builder.ExportOutput(camera->color_image_output_port(), "color_image");
   builder.ExportOutput(camera->depth_image_32F_output_port(), "depth_image");
 
-  auto ToPC = builder.AddSystem<perception::DepthImageToPointCloud>(camera->depth_camera_info());
-  builder.Connect(camera->depth_image_32F_output_port(), ToPC->depth_image_input_port());
-  builder.Connect(camera->color_image_output_port(), ToPC->color_image_input_port());
+  auto ToPC = builder.AddSystem<perception::DepthImageToPointCloud>(
+      camera->depth_camera_info());
+  builder.Connect(camera->depth_image_32F_output_port(),
+                  ToPC->depth_image_input_port());
+  builder.Connect(camera->color_image_output_port(),
+                  ToPC->color_image_input_port());
+
+  auto pointCloudVisualizer =
+      builder.AddSystem<geometry::MeshcatPointCloudVisualizer<double>>(meshCat,
+                                                                       "cloud");
+  pointCloudVisualizer->set_name("point_cloud_visualizer");
+  builder.Connect(ToPC->point_cloud_output_port(),
+                  pointCloudVisualizer->cloud_input_port());
+
+  std::unique_ptr<AbstractValue> abstractX_CAM = AbstractValue::Make(X_CAM);
+  auto cameraPose = builder.template AddSystem<systems::ConstantValueSource>(
+      Value<math::RigidTransformd>(X_CAM));
+  cameraPose->get_output_port();
+  cameraPose->set_name("camera_pose");
+
+  builder.Connect(cameraPose->get_output_port(),
+                  pointCloudVisualizer->pose_input_port());
+  builder.ExportOutput(ToPC->point_cloud_output_port(), "point_cloud");
 
   geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
   auto sys = builder.Build();
@@ -147,6 +169,8 @@ void runMain()
   simulator.set_target_realtime_rate(1);
   simulator.Initialize();
 
+  while (true) {
+  }
 }
 
 } // namespace kuka_iiwa
