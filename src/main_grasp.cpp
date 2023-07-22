@@ -61,7 +61,7 @@
 #include <drake/solvers/solve.h>
 
 // define constants needed here
-#define MULTIBODY_DT 0.002
+#define MULTIBODY_DT 0.0001
 // #define MULTIBODY_DT 0.000001
 #define ARM_PATH                                                               \
   "drake/manipulation/models/iiwa_description/urdf/"                           \
@@ -83,28 +83,30 @@ namespace kuka_iiwa {
 using TrajHashBrown = std::map<std::string, math::RigidTransform<double>>;
 using TimeHashBrown = std::map<std::string, double>;
 
-Eigen::VectorX<double>
-startTrajectoryCommand(math::RigidTransform<double> goalPose,
-                       const multibody::MultibodyPlant<double> &plant,
-                       multibody::ModelInstanceIndex gripper_instance) {
-  multibody::InverseKinematics ik(plant, true);
-  ik.AddPositionConstraint(plant.GetFrameByName("body", gripper_instance),
-                           Eigen::Vector3d::Zero(3), plant.world_frame(),
-                           goalPose.translation(), goalPose.translation());
-  ik.AddOrientationConstraint(plant.GetFrameByName("body", gripper_instance),
-                              math::RotationMatrix<double>(),
-                              plant.world_frame(), goalPose.rotation(), 0.0);
-  solvers::MathematicalProgram *prog = ik.get_mutable_prog();
-  solvers::VectorXDecisionVariable q = ik.q();
-  prog->AddQuadraticErrorCost(Eigen::MatrixXd::Identity(16, 16),
-                              Eigen::VectorXd::Ones(16), q);
-  prog->SetInitialGuess(q, Eigen::VectorXd::Ones(16));
-  solvers::MathematicalProgramResult result = solvers::Solve(ik.prog());
-  Eigen::VectorXd solution = result.GetSolution(ik.q());
+class DummyPosVel : public systems::LeafSystem<double> {
+public:
+  DummyPosVel() {
+    Q_port = &(DeclareVectorInputPort("iiwa_position", 7));
+    V_port = &(DeclareVectorInputPort("iiwa_velocity", 7));
 
-  Eigen::VectorX<double> qVec = solution(Eigen::seq(0, 6));
-  return qVec;
-}
+    DeclareVectorOutputPort("iiwa_pos_velocity", 14, &DummyPosVel::CalcOutput);
+  }
+
+private:
+  void CalcOutput(const systems::Context<double> &context,
+                  systems::BasicVector<double> *output) const {
+    auto q = Q_port->Eval(context);
+    auto v = V_port->Eval(context);
+
+    VectorX<double> vecJoined(q.size() + v.size());
+    vecJoined << q, v;
+    // std::cout << "command vector:\n" << vecJoined << std::endl;
+    output->SetFromVector(vecJoined);
+  }
+
+  systems::InputPort<double> *Q_port;
+  systems::InputPort<double> *V_port;
+};
 
 int runMain() {
   systems::DiagramBuilder<double> builder;
@@ -164,14 +166,17 @@ int runMain() {
                                     Vector3<double>(0.5, 0.0, 0.0))}};
 
   plant.Finalize();
+  std::cout << "Brick " << plant.num_positions(brick_instance) << std::endl;
+  std::cout << "Arm " << plant.num_positions(arm_instance) << std::endl;
+  std::cout << "Gripper " << plant.num_positions(gripper_instance) << std::endl;
   plant.SetDefaultFreeBodyPose(plant.GetBodyByName("base_link"),
                                X_O["initial"]);
   const int num_joints = plant_arm.num_positions();
 
-  auto desired_state_from_position =
-      builder.AddSystem<systems::StateInterpolatorWithDiscreteDerivative>(
-          7, plant.time_step(), true /* suppress_initial_transient */);
-  desired_state_from_position->set_name("desired_state_from_position");
+  // auto desired_state_from_position =
+  //     builder.AddSystem<systems::StateInterpolatorWithDiscreteDerivative>(
+  //         7, plant.time_step(), true /* suppress_initial_transient */);
+  // desired_state_from_position->set_name("desired_state_from_position");
 
   // base controller for robot
   Eigen::VectorXd kp = Eigen::VectorXd::Zero(kIiwaArmNumJoints);
@@ -187,8 +192,8 @@ int runMain() {
           systems::BasicVector<double>{0.1, 0.1});
   gripperDesiredStateSource->set_name("gripper_desired_state_constant");
   auto wsgController =
-      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>(100.0,
-                                                                         2.5);
+      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>(
+          0.01, 0.0005);
 
   auto armController =
       builder
@@ -197,29 +202,28 @@ int runMain() {
 
   const math::RigidTransform<double> setPose1(
       math::RollPitchYaw<double>(-M_PI_2, 0, 0),
-      Eigen::Vector3d(-0.2, -0.65, 0.2));
+      Eigen::Vector3d(-0.2, -0.65, 0.4));
   const math::RigidTransform<double> setPose2(
       math::RollPitchYaw<double>(-M_PI_2, 0, 0),
-      Eigen::Vector3d(-0.2, -0.65, 0.1));
-
-  // Eigen::VectorX<double> solution =
-  //     startTrajectoryCommand(setPose, plant, gripper_instance);
-  // drake::VectorX<double> q_des(solution);
-
-  // auto desired_pos_source =
-  //     builder.AddSystem<systems::ConstantVectorSource<double>>(
-  //         desired_pos_input);
-  // desired_pos_source->set_name("desired_pos_source");
+      Eigen::Vector3d(-0.2, -0.65, 0.15));
 
   std::vector<math::RigidTransform<double>> goalPoses{setPose1, setPose2};
   auto ikTrajectorySys =
       builder.AddSystem<IKTrajectorySystem>(plant, goalPoses);
   ikTrajectorySys->set_name("ik_trajectory_system");
 
+  Eigen::VectorXd zv = Eigen::VectorXd::Zero(7);
+  auto zeroVelocitySys =
+      builder.AddSystem<systems::ConstantVectorSource<double>>(zv);
+  zeroVelocitySys->set_name("zero_velocity_sys");
+
+  auto dummySys = builder.AddSystem<DummyPosVel>();
+  dummySys->set_name("dummy_sys");
+
+  // builder.Connect(plant.get_state_output_port(),
+  //                 ikTrajectorySys->GetInputPort("iiwa_current_state"));
   builder.Connect(ikTrajectorySys->GetOutputPort("wsg_position"),
                   wsgController->get_desired_state_input_port());
-  // builder.Connect(gripperDesiredStateSource->get_output_port(),
-  //                 wsgController->get_desired_state_input_port());
   builder.Connect(wsgController->get_generalized_force_output_port(),
                   plant.get_actuation_input_port(gripper_instance));
   builder.Connect(plant.get_state_output_port(gripper_instance),
@@ -227,16 +231,20 @@ int runMain() {
 
   builder.Connect(plant.get_state_output_port(arm_instance),
                   armController->get_input_port_estimated_state());
-  // builder.Connect(desired_pos_source->get_output_port(),
+  // builder.Connect(ikTrajectorySys->GetOutputPort("iiwa_position"),
   //                 desired_state_from_position->get_input_port());
   builder.Connect(ikTrajectorySys->GetOutputPort("iiwa_position"),
-                  desired_state_from_position->get_input_port());
+                  dummySys->GetInputPort("iiwa_position"));
+  builder.Connect(zeroVelocitySys->get_output_port(),
+                  dummySys->GetInputPort("iiwa_velocity"));
+  builder.Connect(dummySys->get_output_port(),
+                  armController->get_input_port_desired_state());
 
   builder.Connect(armController->get_output_port_control(),
                   plant.get_actuation_input_port(arm_instance));
 
-  builder.Connect(desired_state_from_position->get_output_port(),
-                  armController->get_input_port_desired_state());
+  // builder.Connect(desired_state_from_position->get_output_port(),
+  //                 armController->get_input_port_desired_state());
 
   // start visual + simulation
   geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
@@ -245,7 +253,7 @@ int runMain() {
 
   systems::Simulator<double> simulator(*sys);
 
-  simulator.set_publish_every_time_step(false);
+  simulator.set_publish_every_time_step(true);
   simulator.set_target_realtime_rate(1);
   simulator.Initialize();
   simulator.AdvanceTo(100.0);
