@@ -62,6 +62,7 @@
 
 // define constants needed here
 #define MULTIBODY_DT 0.002
+// #define MULTIBODY_DT 0.000001
 #define ARM_PATH                                                               \
   "drake/manipulation/models/iiwa_description/urdf/"                           \
   "iiwa14_polytope_collision.urdf"
@@ -183,10 +184,11 @@ int runMain() {
   // setting up gripper contrlyoller (doesn't really do anything)
   auto gripperDesiredStateSource =
       builder.AddSystem<systems::ConstantVectorSource<double>>(
-          systems::BasicVector<double>{0, 0});
+          systems::BasicVector<double>{0.1, 0.1});
   gripperDesiredStateSource->set_name("gripper_desired_state_constant");
   auto wsgController =
-      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>();
+      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgPdController>(100.0,
+                                                                         2.5);
 
   auto armController =
       builder
@@ -214,8 +216,10 @@ int runMain() {
       builder.AddSystem<IKTrajectorySystem>(plant, goalPoses);
   ikTrajectorySys->set_name("ik_trajectory_system");
 
-  builder.Connect(gripperDesiredStateSource->get_output_port(),
+  builder.Connect(ikTrajectorySys->GetOutputPort("wsg_position"),
                   wsgController->get_desired_state_input_port());
+  // builder.Connect(gripperDesiredStateSource->get_output_port(),
+  //                 wsgController->get_desired_state_input_port());
   builder.Connect(wsgController->get_generalized_force_output_port(),
                   plant.get_actuation_input_port(gripper_instance));
   builder.Connect(plant.get_state_output_port(gripper_instance),
@@ -225,7 +229,7 @@ int runMain() {
                   armController->get_input_port_estimated_state());
   // builder.Connect(desired_pos_source->get_output_port(),
   //                 desired_state_from_position->get_input_port());
-  builder.Connect(ikTrajectorySys->get_output_port(),
+  builder.Connect(ikTrajectorySys->GetOutputPort("iiwa_position"),
                   desired_state_from_position->get_input_port());
 
   builder.Connect(armController->get_output_port_control(),

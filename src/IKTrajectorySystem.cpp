@@ -5,6 +5,7 @@
 #include <drake/solvers/solve.h>
 #include <drake/systems/framework/basic_vector.h>
 #include <drake/systems/framework/leaf_system.h>
+#include <drake/systems/framework/output_port.h>
 #include <iostream>
 #include <vector>
 
@@ -44,10 +45,10 @@ public:
       positions_.push_back(qVec);
     }
 
-    DeclareVectorOutputPort("iiwa_position", 7,
-                            &IKTrajectorySystem::CalcOutput);
-    // DeclareVectorOutputPort("wsg_position", 2,
-    //                         &IKTrajectorySystem::ManipulateGripper);
+    iiwaOutputPort_ = &DeclareVectorOutputPort("iiwa_position", 7,
+                                               &IKTrajectorySystem::CalcOutput);
+    wsgOutputPort_ = &DeclareVectorOutputPort(
+        "wsg_position", 2, &IKTrajectorySystem::ManipulateGripper);
 
     startTime_ = std::chrono::system_clock::now();
     currentStep_ = 0;
@@ -70,12 +71,28 @@ private:
   }
 
   void ManipulateGripper(const systems::Context<double> &context,
-                         systems::BasicVector<double> *output) const {}
+                         systems::BasicVector<double> *output) const {
+    time currentTime = std::chrono::system_clock::now();
+    int seconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      currentTime - startTime_)
+                      .count() /
+                  1000;
+
+    if (seconds < 10) {
+      // output->set_value(Eigen::Vector2d(0.05, 0.05));
+      output->set_value(Eigen::Vector2d(0.1, 0.1));
+    } else {
+      output->set_value(Eigen::Vector2d(0.05, 0.05));
+      // output->set_value(Eigen::Vector2d(0.1, 0.1));
+    }
+  }
 
   multibody::MultibodyPlant<double> *plant_;
   multibody::ModelInstanceIndex G_;
-  std::vector<Eigen::VectorX<double>> positions_;
+  const systems::OutputPort<double> *iiwaOutputPort_{};
+  const systems::OutputPort<double> *wsgOutputPort_{};
 
+  std::vector<Eigen::VectorX<double>> positions_;
   time startTime_;
   int currentStep_;
 };
