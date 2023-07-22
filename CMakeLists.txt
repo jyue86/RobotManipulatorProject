@@ -30,3 +30,7 @@ target_link_libraries(kuka_brick drake::drake Eigen3::Eigen)
 
 add_executable(gripper_vis test/tests/visualize_gripper_pose.cpp)
 target_link_libraries(gripper_vis drake::drake Eigen3::Eigen)
+
+add_executable(pick_and_place test/tests/pick_and_place.cpp
+                              test/tests/IKTrajectorySystem.cpp)
+target_link_libraries(pick_and_place drake::drake Eigen3::Eigen)
