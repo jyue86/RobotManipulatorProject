@@ -13,11 +13,11 @@ include_directories(Eigen/)
 # find_package(Threads MODULE REQUIRED)
 find_package(drake CONFIG REQUIRED PATHS /opt/drake)
 
-add_executable(main src/main.cpp src/IKTrajectorySystem.cpp)
+add_executable(main src/main.cpp)
 target_link_libraries(main drake::drake Eigen3::Eigen)
 
-add_executable(grasp_main src/main_grasp.cpp)
-target_link_libraries(grasp_main drake::drake Eigen3::Eigen)
+# add_executable(grasp_main src/main_grasp.cpp)
+# target_link_libraries(grasp_main drake::drake Eigen3::Eigen)
 
 add_executable(kuka_sim_test test/tests/run_kuka_sim.cpp)
 target_link_libraries(kuka_sim_test drake::drake Eigen3::Eigen)
