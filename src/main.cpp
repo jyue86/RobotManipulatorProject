@@ -21,6 +21,7 @@
 
 #include <drake/multibody/parsing/parser.h>
 
+#include <drake/perception/point_cloud_flags.h>
 #include <drake/systems/analysis/simulator.h>
 #include <drake/systems/controllers/inverse_dynamics_controller.h>
 
@@ -34,6 +35,8 @@
 #include <drake/geometry/meshcat_point_cloud_visualizer.h>
 #include <drake/geometry/meshcat_visualizer.h>
 #include <drake/geometry/render/render_camera.h>
+#include <drake/geometry/render_vtk/factory.h>
+#include <drake/geometry/render_vtk/render_engine_vtk_params.h>
 #include <drake/perception/depth_image_to_point_cloud.h>
 #include <drake/systems/primitives/constant_value_source.h>
 #include <drake/systems/primitives/constant_vector_source.h>
@@ -83,6 +86,10 @@ void runMain() {
   auto [plant, scene_graph] =
       multibody::AddMultibodyPlantSceneGraph(&builder, MULTIBODY_DT);
   multibody::MultibodyPlant<double> plant_arm(MULTIBODY_DT);
+
+  scene_graph.AddRenderer(
+      "rgbd_sensor",
+      geometry::MakeRenderEngineVtk(geometry::RenderEngineVtkParams()));
 
   const std::string urdf = FindResourceOrThrow(ARM_PATH);
   const std::string gripper_sdf = FindResourceOrThrow(GRIPPER_PATH);
@@ -138,7 +145,9 @@ void runMain() {
   builder.ExportOutput(camera->depth_image_32F_output_port(), "depth_image");
 
   auto ToPC = builder.AddSystem<perception::DepthImageToPointCloud>(
-      camera->depth_camera_info());
+      camera->depth_camera_info(), systems::sensors::PixelType::kDepth32F, 1.0,
+      perception::pc_flags::BaseField::kXYZs |
+          perception::pc_flags::BaseField::kRGBs);
   builder.Connect(camera->depth_image_32F_output_port(),
                   ToPC->depth_image_input_port());
   builder.Connect(camera->color_image_output_port(),
@@ -152,16 +161,23 @@ void runMain() {
                   pointCloudVisualizer->cloud_input_port());
 
   std::unique_ptr<AbstractValue> abstractX_CAM = AbstractValue::Make(X_CAM);
-  auto cameraPose = builder.template AddSystem<systems::ConstantValueSource>(
+  auto cameraPose = builder.AddSystem<systems::ConstantValueSource>(
       Value<math::RigidTransformd>(X_CAM));
+  // auto cameraPose =
+  // builder.AddSystem<systems::ConstantValueSource<math::RigidTransformd>>(abstractX_CAM);
   cameraPose->get_output_port();
   cameraPose->set_name("camera_pose");
+
+  // Output port return type -> geometry::QueryObject<T>
+  // std::unique_ptr<render::RenderEngine> renderer
+  builder.Connect(scene_graph.get_query_output_port(),
+                  camera->query_object_input_port());
 
   builder.Connect(cameraPose->get_output_port(),
                   pointCloudVisualizer->pose_input_port());
   builder.ExportOutput(ToPC->point_cloud_output_port(), "point_cloud");
 
-  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
+  // geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph);
   auto sys = builder.Build();
   systems::Simulator<double> simulator(*sys);
 
